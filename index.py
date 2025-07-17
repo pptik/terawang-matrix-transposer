@@ -1,0 +1,293 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+import numpy as np
+import scipy.ndimage
+import scipy.signal
+import codecs, json
+import time
+import os
+import pika
+from ftplib import FTP
+from collections import defaultdict
+from datetime import datetime
+import shutil
+from dotenv import load_dotenv
+
+# Muat variabel dari file .env
+load_dotenv()
+
+# =============================================================================
+# KONFIGURASI APLIKASI (DIAMBIL DARI .env)
+# =============================================================================
+# Konfigurasi Folder Lokal
+LOCAL_SOURCE_DIR = "data_mentah"
+LOCAL_RESULT_DIR = "hasil_proses_lokal"
+LOCAL_TEMP_DIR = "temp_data"
+
+# Akses FTP untuk unggah hasil
+FTP_HOST = os.getenv("FTP_HOST")
+FTP_PORT = int(os.getenv("FTP_PORT", 2121))
+FTP_USER = os.getenv("FTP_USER")
+FTP_PASSWORD = os.getenv("FTP_PASSWORD")
+FTP_FOLDER_HASIL = os.getenv("FTP_FOLDER_HASIL", "/result")
+
+# Akses RabbitMQ
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
+RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
+RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
+RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST")
+RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE_RESULT", "result_queue")
+
+# Konfigurasi Pemrosesan
+DIAMETER = 0.3
+PROCESSING_INTERVAL_SECONDS = 10
+GROUPING_TIME_WINDOW_MINUTES = 15
+
+
+# =============================================================================
+# FUNGSI PEMROSESAN SINYAL (TIDAK DIUBAH)
+# =============================================================================
+def load_sigarray_from_json(filename):
+    """Memuat data sensor dan timestamp dari satu file JSON."""
+    all_sensor_data = {}
+    timestamp_data = None
+    try:
+        with open(filename, 'r', encoding='utf-8') as f:
+            json_content = json.load(f)
+    except Exception as e:
+        print(f"Error reading/parsing JSON {filename}: {e}")
+        return None
+
+    for item in json_content:
+        if 'timestamp' in item:
+            timestamp_data = item['timestamp']
+        for i in range(1, 9):
+            key = f'value{i}'
+            if key in item:
+                all_sensor_data[key] = item[key]
+    
+    if timestamp_data is None or len(all_sensor_data) != 8:
+        print(f"Error: Data tidak lengkap di file {filename}")
+        return None
+
+    try:
+        sensor_arrays = [all_sensor_data[f'value{i}'] for i in range(1, 9)]
+        arrays_to_stack = sensor_arrays + [timestamp_data]
+        min_len = min(len(arr) for arr in arrays_to_stack)
+        sigarray = np.column_stack([np.array(arr[:min_len]) for arr in arrays_to_stack])
+        return sigarray
+    except Exception as e:
+        print(f"Error saat menyusun numpy array: {e}")
+        return None
+
+def gcc(sig, refsig, fs=1000000, CCType="PHAT", max_tau=None):
+    """Menghitung Generalized Cross-Correlation."""
+    n = len(sig)
+    sig = sig - np.mean(sig)
+    refsig = refsig - np.mean(refsig)
+
+    SIG = np.fft.rfft(sig, n=n)
+    REFSIG = np.fft.rfft(refsig, n=n)
+    R = SIG * np.conj(REFSIG)
+    
+    if CCType.upper() == "PHAT":
+        WEIGHT = 1 / (np.abs(R) + 1e-10)
+    else:
+        WEIGHT = 1.0
+    
+    Integ = R * WEIGHT
+    cc = np.fft.irfft(Integ, n=n)
+    cc = np.fft.fftshift(cc)
+
+    if max_tau is not None:
+        max_shift = int(fs * max_tau)
+    else:
+        max_shift = n // 2
+
+    center_index = n // 2
+    search_range = slice(center_index - max_shift, center_index + max_shift)
+    
+    shift = np.argmax(np.abs(cc[search_range])) - max_shift
+    tau = shift / float(fs)
+    
+    return np.abs(tau), cc, None
+
+def onetap(sigarray, which, diameter):
+    """Menghitung kecepatan dari satu set data ketukan."""
+    sensors = [sigarray[:, i] for i in range(8)]
+    radius = diameter / 2
+    distances = {
+        (1,2): radius * 0.765, (1,3): radius * 1.414, (1,4): radius * 1.847, (1,5): diameter,
+        (1,6): radius * 1.847, (1,7): radius * 1.414, (1,8): radius * 0.765,
+        (2,3): radius * 0.765, (2,4): radius * 1.414, (2,5): radius * 1.847, (2,6): diameter,
+        (2,7): radius * 1.847, (2,8): radius * 1.414,
+        (3,4): radius * 0.765, (3,5): radius * 1.414, (3,6): radius * 1.847, (3,7): diameter,
+        (3,8): radius * 1.847,
+        (4,5): radius * 0.765, (4,6): radius * 1.414, (4,7): radius * 1.847, (4,8): diameter,
+        (5,6): radius * 0.765, (5,7): radius * 1.414, (5,8): radius * 1.847,
+        (6,7): radius * 0.765, (6,8): radius * 1.414,
+        (7,8): radius * 0.765
+    }
+    
+    refsig = sensors[which - 1]
+    velocities = np.zeros(8)
+    
+    for i in range(8):
+        if i == (which - 1): continue
+        sig = sensors[i]
+        pair = tuple(sorted((which, i + 1)))
+        dist = distances.get(pair)
+        if dist is None: continue
+        tof = gcc(refsig=refsig, sig=sig)[0]
+        velocities[i] = dist / tof if tof > 1e-9 else np.inf
+    return velocities.astype(np.float32)
+
+# =============================================================================
+# FUNGSI UTAMA UNTUK ORKESTRASI PEMROSESAN
+# =============================================================================
+def process_batch(file_paths, diameter):
+    """Memproses satu batch (8 file) dan mengembalikan matriks kecepatan."""
+    all_velocity_rows = []
+    sorted_paths = sorted(file_paths)
+    for i, filepath in enumerate(sorted_paths, start=1):
+        sigarray = load_sigarray_from_json(filepath)
+        if sigarray is None:
+            print(f"Gagal memproses {filepath}, baris akan diisi nol.")
+            all_velocity_rows.append(np.zeros(8, dtype=np.float32))
+            continue
+        
+        velocity_row = onetap(sigarray, which=i, diameter=diameter)
+        all_velocity_rows.append(velocity_row)
+    
+    return np.stack(all_velocity_rows)
+
+def publish_to_rabbitmq(message):
+    """Mempublikasikan pesan ke RabbitMQ."""
+    try:
+        credentials = pika.PlainCredentials(RABBITMQ_USERNAME, RABBITMQ_PASSWORD)
+        parameters = pika.ConnectionParameters(
+            RABBITMQ_HOST, RABBITMQ_PORT, RABBITMQ_VHOST, credentials)
+        connection = pika.BlockingConnection(parameters)
+        channel = connection.channel()
+        channel.queue_declare(queue=RABBITMQ_QUEUE, durable=False)
+        channel.basic_publish(
+            exchange='',
+            routing_key=RABBITMQ_QUEUE,
+            body=message,
+            properties=pika.BasicProperties(delivery_mode=2)
+        )
+        connection.close()
+        print(f"Berhasil mempublikasikan pesan '{message}' ke RabbitMQ.")
+        return True
+    except Exception as e:
+        print(f"Error saat publikasi ke RabbitMQ: {e}")
+        return False
+
+def parse_filename(filename):
+    """Mengekstrak informasi dari nama file."""
+    try:
+        parts = os.path.basename(filename).replace('.json', '').split('_')
+        guid = parts[0]
+        timestamp = int(parts[-2])
+        index = int(parts[-1])
+        return {'guid': guid, 'timestamp': timestamp, 'index': index, 'filename': filename}
+    except (IndexError, ValueError):
+        return None
+
+def upload_to_ftp(local_path, remote_filename):
+    """Mengunggah satu file ke server FTP."""
+    try:
+        with FTP() as ftp, open(local_path, 'rb') as f:
+            ftp.connect(FTP_HOST, FTP_PORT)
+            ftp.login(FTP_USER, FTP_PASSWORD)
+            try:
+                ftp.mkd(FTP_FOLDER_HASIL)
+            except Exception:
+                pass 
+            ftp.cwd(FTP_FOLDER_HASIL)
+            ftp.storbinary(f'STOR {remote_filename}', f)
+        print(f"Hasil '{remote_filename}' berhasil diunggah ke FTP.")
+        return True
+    except Exception as e:
+        print(f"Error saat mengunggah ke FTP: {e}")
+        return False
+
+# =============================================================================
+# EKSEKUSI UTAMA (DAEMON)
+# =============================================================================
+def main():
+    """Loop utama untuk memonitor folder lokal dan memproses file."""
+    for dir_path in [LOCAL_SOURCE_DIR, LOCAL_RESULT_DIR, LOCAL_TEMP_DIR]:
+        if not os.path.exists(dir_path):
+            os.makedirs(dir_path)
+            print(f"Folder '{dir_path}' telah dibuat.")
+
+    while True:
+        batch_processed = False
+        print(f"\n[{datetime.now()}] Memeriksa folder lokal: '{LOCAL_SOURCE_DIR}'...")
+        try:
+            files_in_dir = os.listdir(LOCAL_SOURCE_DIR)
+            groups_by_guid = defaultdict(list)
+            for filename in files_in_dir:
+                parsed_info = parse_filename(filename)
+                if parsed_info:
+                    groups_by_guid[parsed_info['guid']].append(parsed_info)
+
+            for guid, files in groups_by_guid.items():
+                if len(files) < 8:
+                    continue
+
+                files.sort(key=lambda x: x['timestamp'])
+
+                for i in range(len(files) - 7):
+                    window = files[i : i + 8]
+                    
+                    time_diff = window[-1]['timestamp'] - window[0]['timestamp']
+                    if time_diff <= GROUPING_TIME_WINDOW_MINUTES * 60:
+                        indices = {f['index'] for f in window}
+                        if indices == set(range(1, 9)):
+                            print(f"Batch valid ditemukan untuk GUID {guid} dengan rentang waktu {time_diff} detik.")
+                            
+                            filenames_to_process = [f['filename'] for f in window]
+                            local_paths = [os.path.join(LOCAL_SOURCE_DIR, fname) for fname in filenames_to_process]
+                            
+                            batch_id = f"{guid}_{window[0]['timestamp']}"
+                            result_filename = f"result_{batch_id}.json"
+                            local_result_path = os.path.join(LOCAL_TEMP_DIR, result_filename)
+                            
+                            velo_matrix = process_batch(local_paths, DIAMETER)
+                            
+                            velo_list = np.nan_to_num(velo_matrix, posinf=0).tolist()
+                            with codecs.open(local_result_path, 'w', encoding='utf-8') as f:
+                                json.dump(velo_list, f, indent=4)
+                            
+                            if upload_to_ftp(local_result_path, result_filename):
+                                publish_to_rabbitmq(result_filename)
+                                for path in local_paths:
+                                    try:
+                                        os.remove(path)
+                                    except OSError as e:
+                                        print(f"Error saat menghapus file sumber {path}: {e}")
+                                print(f"File sumber untuk batch {batch_id} telah dihapus.")
+
+                            try:
+                                shutil.move(local_result_path, os.path.join(LOCAL_RESULT_DIR, result_filename))
+                                print(f"File hasil '{result_filename}' telah disimpan ke '{LOCAL_RESULT_DIR}'.")
+                            except OSError as e:
+                                print(f"Error saat memindahkan file hasil {result_filename}: {e}")
+                            
+                            batch_processed = True
+                            break
+                if batch_processed:
+                    break
+
+        except Exception as e:
+            print(f"Terjadi error pada loop utama: {e}")
+
+        print(f"Menunggu {PROCESSING_INTERVAL_SECONDS} detik sebelum pengecekan berikutnya...")
+        time.sleep(PROCESSING_INTERVAL_SECONDS)
+
+if __name__ == "__main__":
+    main()

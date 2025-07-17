@@ -1,0 +1,6 @@
+.env
+/data_mentah
+/data_terproses
+/hasil_proses_lokal
+/temp_data
+main.py
