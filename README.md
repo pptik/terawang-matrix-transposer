@@ -18,7 +18,7 @@ Pastikan Anda membuat struktur folder berikut di direktori yang sama dengan skri
 
 ```
 .
-├── main.py                 # Skrip utama ini
+├── index.py                # Skrip utama ini
 ├── .env                    # File konfigurasi (dibuat manual)
 ├── requirements.txt        # File dependensi
 ├── data_mentah/            # Tempat menaruh file JSON sumber
