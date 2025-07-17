@@ -22,17 +22,17 @@ load_dotenv()
 # KONFIGURASI APLIKASI (DIAMBIL DARI .env)
 # =============================================================================
 # Konfigurasi Folder Lokal
-LOCAL_SOURCE_DIR = os.getenv("LOCAL_SOURCE_DIR")
 LOCAL_RESULT_DIR = "hasil_proses_lokal"
-LOCAL_TEMP_DIR = "temp_data"
+LOCAL_TEMP_DIR = "temp_data" # Folder untuk mengunduh file & menyimpan hasil sementara
 
-# Akses FTP untuk unggah hasil
+# Akses FTP
 FTP_HOST = os.getenv("FTP_HOST")
 FTP_PORT = int(os.getenv("FTP_PORT", 2121))
 FTP_USER = os.getenv("FTP_USER")
 FTP_PASSWORD = os.getenv("FTP_PASSWORD")
+FTP_SOURCE_FOLDER = os.getenv("FTP_SOURCE_FOLDER", "/terawang") # Folder sumber di FTP
 FTP_FOLDER_HASIL = os.getenv("FTP_FOLDER_HASIL", "/result")
-FTP_FOLDER_DATA_ROW = os.getenv("FTP_FOLDER_DATA_ROW", "/data_row") # Folder baru untuk data mentah
+FTP_FOLDER_DATA_ROW = os.getenv("FTP_FOLDER_DATA_ROW", "/data_row")
 
 # Akses RabbitMQ
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
@@ -199,12 +199,11 @@ def parse_filename(filename):
     except (IndexError, ValueError):
         return None
 
-def upload_to_ftp(local_path, remote_filename, remote_folder):
-    """Mengunggah satu file ke folder spesifik di server FTP."""
+def upload_to_ftp(ftp, local_path, remote_filename, remote_folder):
+    """Mengunggah satu file ke folder spesifik di server FTP menggunakan koneksi yang ada."""
     try:
-        with FTP() as ftp, open(local_path, 'rb') as f:
-            ftp.connect(FTP_HOST, FTP_PORT)
-            ftp.login(FTP_USER, FTP_PASSWORD)
+        with open(local_path, 'rb') as f:
+            # Pastikan direktori tujuan ada
             try:
                 ftp.mkd(remote_folder)
             except Exception:
@@ -221,91 +220,96 @@ def upload_to_ftp(local_path, remote_filename, remote_folder):
 # EKSEKUSI UTAMA (DAEMON)
 # =============================================================================
 def main():
-    """Loop utama untuk memonitor folder lokal dan memproses file."""
-    for dir_path in [LOCAL_SOURCE_DIR, LOCAL_RESULT_DIR, LOCAL_TEMP_DIR]:
+    """Loop utama untuk memonitor FTP dan memproses file."""
+    for dir_path in [LOCAL_RESULT_DIR, LOCAL_TEMP_DIR]:
         if not os.path.exists(dir_path):
             os.makedirs(dir_path)
             print(f"Folder '{dir_path}' telah dibuat.")
 
     while True:
         batch_processed = False
-        print(f"\n[{datetime.now()}] Memeriksa folder lokal: '{LOCAL_SOURCE_DIR}'...")
+        print(f"\n[{datetime.now()}] Menghubungkan ke FTP untuk memeriksa folder: '{FTP_SOURCE_FOLDER}'...")
         try:
-            files_in_dir = os.listdir(LOCAL_SOURCE_DIR)
-            groups_by_guid = defaultdict(list)
-            for filename in files_in_dir:
-                parsed_info = parse_filename(filename)
-                if parsed_info:
-                    groups_by_guid[parsed_info['guid']].append(parsed_info)
+            with FTP() as ftp:
+                ftp.connect(FTP_HOST, FTP_PORT)
+                ftp.login(FTP_USER, FTP_PASSWORD)
+                ftp.cwd(FTP_SOURCE_FOLDER)
 
-            for guid, files in groups_by_guid.items():
-                if len(files) < 8:
-                    continue
+                files_on_ftp = ftp.nlst()
+                groups_by_guid = defaultdict(list)
+                for filename in files_on_ftp:
+                    parsed_info = parse_filename(filename)
+                    if parsed_info:
+                        groups_by_guid[parsed_info['guid']].append(parsed_info)
 
-                files.sort(key=lambda x: x['timestamp'])
+                for guid, files in groups_by_guid.items():
+                    if len(files) < 8:
+                        continue
 
-                for i in range(len(files) - 7):
-                    window = files[i : i + 8]
-                    
-                    time_diff = window[-1]['timestamp'] - window[0]['timestamp']
-                    if time_diff <= GROUPING_TIME_WINDOW_MINUTES * 60:
-                        indices = {f['index'] for f in window}
-                        if indices == set(range(1, 9)):
-                            print(f"Batch valid ditemukan untuk GUID {guid} dengan rentang waktu {time_diff} detik.")
-                            
-                            # --- MODIFIKASI PENAMAAN DAN PAYLOAD ---
-                            # 1. Buat nama file baru dengan UUID
-                            new_uuid = uuid.uuid4()
-                            guid_survey = f"SURVEY-{new_uuid}-2025"
-                            result_filename = f"{guid_survey}.json"
-                            
-                            # 2. Siapkan path dan data
-                            filenames_to_process = [f['filename'] for f in window]
-                            local_paths = [os.path.join(LOCAL_SOURCE_DIR, fname) for fname in filenames_to_process]
-                            local_result_path = os.path.join(LOCAL_TEMP_DIR, result_filename)
-                            
-                            # 3. Proses batch
-                            velo_matrix = process_batch(local_paths, DIAMETER)
-                            velo_list = np.nan_to_num(velo_matrix, posinf=0).tolist()
-                            with codecs.open(local_result_path, 'w', encoding='utf-8') as f:
-                                json.dump(velo_list, f, indent=4)
-                            
-                            # 4. Unggah, publish, dan bersihkan
-                            if upload_to_ftp(local_result_path, result_filename, FTP_FOLDER_HASIL):
-                                # Payload untuk result_queue: GUID_SURVEY.json
-                                publish_to_rabbitmq(result_filename, RABBITMQ_QUEUE)
+                    files.sort(key=lambda x: x['timestamp'])
+
+                    for i in range(len(files) - 7):
+                        window = files[i : i + 8]
+                        
+                        time_diff = window[-1]['timestamp'] - window[0]['timestamp']
+                        if time_diff <= GROUPING_TIME_WINDOW_MINUTES * 60:
+                            indices = {f['index'] for f in window}
+                            if indices == set(range(1, 9)):
+                                print(f"Batch valid ditemukan untuk GUID {guid} dengan rentang waktu {time_diff} detik.")
                                 
-                                # Payload untuk graph_queue: {"GUID_SURVEY": ..., "data": [...]}
-                                graph_payload = {
-                                    "GUID_SURVEY": guid_survey,
-                                    "data": filenames_to_process
-                                }
-                                source_files_json = json.dumps(graph_payload)
-                                publish_to_rabbitmq(source_files_json, RABBITMQ_GRAPH_QUEUE)
-                                
-                                # Unggah 8 file sumber ke folder data_row di FTP
-                                for path in local_paths:
-                                    upload_to_ftp(path, os.path.basename(path), FTP_FOLDER_DATA_ROW)
+                                # Download file batch ke folder temp
+                                filenames_to_process = [f['filename'] for f in window]
+                                local_paths = []
+                                for fname in filenames_to_process:
+                                    local_path = os.path.join(LOCAL_TEMP_DIR, fname)
+                                    with open(local_path, 'wb') as f_local:
+                                        ftp.retrbinary(f'RETR {fname}', f_local.write)
+                                    local_paths.append(local_path)
+                                print(f"Berhasil mengunduh {len(local_paths)} file ke '{LOCAL_TEMP_DIR}'.")
 
-                                # Hapus file sumber lokal
-                                for path in local_paths:
-                                    try:
+                                # --- MODIFIKASI PENAMAAN DAN PAYLOAD ---
+                                new_uuid = uuid.uuid4()
+                                guid_survey = f"SURVEY-{new_uuid}-2025"
+                                result_filename = f"{guid_survey}.json"
+                                local_result_path = os.path.join(LOCAL_TEMP_DIR, result_filename)
+                                
+                                velo_matrix = process_batch(local_paths, DIAMETER)
+                                velo_list = np.nan_to_num(velo_matrix, posinf=0).tolist()
+                                with codecs.open(local_result_path, 'w', encoding='utf-8') as f:
+                                    json.dump(velo_list, f, indent=4)
+                                
+                                # Unggah file hasil ke FTP
+                                if upload_to_ftp(ftp, local_result_path, result_filename, FTP_FOLDER_HASIL):
+                                    publish_to_rabbitmq(result_filename, RABBITMQ_QUEUE)
+                                    
+                                    graph_payload = {"GUID_SURVEY": guid_survey, "data": filenames_to_process}
+                                    source_files_json = json.dumps(graph_payload)
+                                    publish_to_rabbitmq(source_files_json, RABBITMQ_GRAPH_QUEUE)
+                                    
+                                    # Unggah 8 file sumber ke folder data_row di FTP
+                                    for path in local_paths:
+                                        upload_to_ftp(ftp, path, os.path.basename(path), FTP_FOLDER_DATA_ROW)
+
+                                    # Hapus file sumber dari FTP folder asal
+                                    ftp.cwd(FTP_SOURCE_FOLDER)
+                                    for fname in filenames_to_process:
+                                        ftp.delete(fname)
+                                    print(f"File sumber untuk batch {guid_survey} telah dihapus dari FTP.")
+
+                                # Pindahkan file hasil lokal & bersihkan temp
+                                try:
+                                    shutil.move(local_result_path, os.path.join(LOCAL_RESULT_DIR, result_filename))
+                                    print(f"File hasil '{result_filename}' telah disimpan ke '{LOCAL_RESULT_DIR}'.")
+                                    # Hapus file sumber yang diunduh dari temp
+                                    for path in local_paths:
                                         os.remove(path)
-                                    except OSError as e:
-                                        print(f"Error saat menghapus file sumber {path}: {e}")
-                                print(f"File sumber untuk batch {guid_survey} telah dihapus dari lokal.")
-
-                            try:
-                                shutil.move(local_result_path, os.path.join(LOCAL_RESULT_DIR, result_filename))
-                                print(f"File hasil '{result_filename}' telah disimpan ke '{LOCAL_RESULT_DIR}'.")
-                            except OSError as e:
-                                print(f"Error saat memindahkan file hasil {result_filename}: {e}")
-                            
-                            batch_processed = True
-                            break
-                if batch_processed:
-                    break
-
+                                except OSError as e:
+                                    print(f"Error saat memindahkan/menghapus file di folder lokal: {e}")
+                                
+                                batch_processed = True
+                                break
+                    if batch_processed:
+                        break
         except Exception as e:
             print(f"Terjadi error pada loop utama: {e}")
 
