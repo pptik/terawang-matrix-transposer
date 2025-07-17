@@ -8,6 +8,7 @@ import codecs, json
 import time
 import os
 import pika
+import uuid # Ditambahkan untuk menghasilkan UUID
 from ftplib import FTP
 from collections import defaultdict
 from datetime import datetime
@@ -21,7 +22,7 @@ load_dotenv()
 # KONFIGURASI APLIKASI (DIAMBIL DARI .env)
 # =============================================================================
 # Konfigurasi Folder Lokal
-LOCAL_SOURCE_DIR = "data_mentah"
+LOCAL_SOURCE_DIR = os.getenv("LOCAL_SOURCE_DIR")
 LOCAL_RESULT_DIR = "hasil_proses_lokal"
 LOCAL_TEMP_DIR = "temp_data"
 
@@ -31,6 +32,7 @@ FTP_PORT = int(os.getenv("FTP_PORT", 2121))
 FTP_USER = os.getenv("FTP_USER")
 FTP_PASSWORD = os.getenv("FTP_PASSWORD")
 FTP_FOLDER_HASIL = os.getenv("FTP_FOLDER_HASIL", "/result")
+FTP_FOLDER_DATA_ROW = os.getenv("FTP_FOLDER_DATA_ROW", "/data_row") # Folder baru untuk data mentah
 
 # Akses RabbitMQ
 RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
@@ -39,6 +41,7 @@ RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST")
 RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE_RESULT", "result_queue")
+RABBITMQ_GRAPH_QUEUE = os.getenv("RABBITMQ_GRAPH_QUEUE", "graph_row")
 
 # Konfigurasi Pemrosesan
 DIAMETER = 0.3
@@ -163,26 +166,26 @@ def process_batch(file_paths, diameter):
     
     return np.stack(all_velocity_rows)
 
-def publish_to_rabbitmq(message):
-    """Mempublikasikan pesan ke RabbitMQ."""
+def publish_to_rabbitmq(message, queue_name):
+    """Mempublikasikan pesan ke antrian RabbitMQ yang spesifik."""
     try:
         credentials = pika.PlainCredentials(RABBITMQ_USERNAME, RABBITMQ_PASSWORD)
         parameters = pika.ConnectionParameters(
             RABBITMQ_HOST, RABBITMQ_PORT, RABBITMQ_VHOST, credentials)
         connection = pika.BlockingConnection(parameters)
         channel = connection.channel()
-        channel.queue_declare(queue=RABBITMQ_QUEUE, durable=False)
+        channel.queue_declare(queue=queue_name, durable=False)
         channel.basic_publish(
             exchange='',
-            routing_key=RABBITMQ_QUEUE,
+            routing_key=queue_name,
             body=message,
             properties=pika.BasicProperties(delivery_mode=2)
         )
         connection.close()
-        print(f"Berhasil mempublikasikan pesan '{message}' ke RabbitMQ.")
+        print(f"Berhasil mempublikasikan pesan ke antrian '{queue_name}'.")
         return True
     except Exception as e:
-        print(f"Error saat publikasi ke RabbitMQ: {e}")
+        print(f"Error saat publikasi ke antrian '{queue_name}': {e}")
         return False
 
 def parse_filename(filename):
@@ -196,22 +199,22 @@ def parse_filename(filename):
     except (IndexError, ValueError):
         return None
 
-def upload_to_ftp(local_path, remote_filename):
-    """Mengunggah satu file ke server FTP."""
+def upload_to_ftp(local_path, remote_filename, remote_folder):
+    """Mengunggah satu file ke folder spesifik di server FTP."""
     try:
         with FTP() as ftp, open(local_path, 'rb') as f:
             ftp.connect(FTP_HOST, FTP_PORT)
             ftp.login(FTP_USER, FTP_PASSWORD)
             try:
-                ftp.mkd(FTP_FOLDER_HASIL)
+                ftp.mkd(remote_folder)
             except Exception:
                 pass 
-            ftp.cwd(FTP_FOLDER_HASIL)
+            ftp.cwd(remote_folder)
             ftp.storbinary(f'STOR {remote_filename}', f)
-        print(f"Hasil '{remote_filename}' berhasil diunggah ke FTP.")
+        print(f"File '{remote_filename}' berhasil diunggah ke FTP folder '{remote_folder}'.")
         return True
     except Exception as e:
-        print(f"Error saat mengunggah ke FTP: {e}")
+        print(f"Error saat mengunggah '{remote_filename}' ke FTP: {e}")
         return False
 
 # =============================================================================
@@ -250,27 +253,47 @@ def main():
                         if indices == set(range(1, 9)):
                             print(f"Batch valid ditemukan untuk GUID {guid} dengan rentang waktu {time_diff} detik.")
                             
+                            # --- MODIFIKASI PENAMAAN DAN PAYLOAD ---
+                            # 1. Buat nama file baru dengan UUID
+                            new_uuid = uuid.uuid4()
+                            guid_survey = f"SURVEY-{new_uuid}-2025"
+                            result_filename = f"{guid_survey}.json"
+                            
+                            # 2. Siapkan path dan data
                             filenames_to_process = [f['filename'] for f in window]
                             local_paths = [os.path.join(LOCAL_SOURCE_DIR, fname) for fname in filenames_to_process]
-                            
-                            batch_id = f"{guid}_{window[0]['timestamp']}"
-                            result_filename = f"result_{batch_id}.json"
                             local_result_path = os.path.join(LOCAL_TEMP_DIR, result_filename)
                             
+                            # 3. Proses batch
                             velo_matrix = process_batch(local_paths, DIAMETER)
-                            
                             velo_list = np.nan_to_num(velo_matrix, posinf=0).tolist()
                             with codecs.open(local_result_path, 'w', encoding='utf-8') as f:
                                 json.dump(velo_list, f, indent=4)
                             
-                            if upload_to_ftp(local_result_path, result_filename):
-                                publish_to_rabbitmq(result_filename)
+                            # 4. Unggah, publish, dan bersihkan
+                            if upload_to_ftp(local_result_path, result_filename, FTP_FOLDER_HASIL):
+                                # Payload untuk result_queue: GUID_SURVEY.json
+                                publish_to_rabbitmq(result_filename, RABBITMQ_QUEUE)
+                                
+                                # Payload untuk graph_queue: {"GUID_SURVEY": ..., "data": [...]}
+                                graph_payload = {
+                                    "GUID_SURVEY": guid_survey,
+                                    "data": filenames_to_process
+                                }
+                                source_files_json = json.dumps(graph_payload)
+                                publish_to_rabbitmq(source_files_json, RABBITMQ_GRAPH_QUEUE)
+                                
+                                # Unggah 8 file sumber ke folder data_row di FTP
+                                for path in local_paths:
+                                    upload_to_ftp(path, os.path.basename(path), FTP_FOLDER_DATA_ROW)
+
+                                # Hapus file sumber lokal
                                 for path in local_paths:
                                     try:
                                         os.remove(path)
                                     except OSError as e:
                                         print(f"Error saat menghapus file sumber {path}: {e}")
-                                print(f"File sumber untuk batch {batch_id} telah dihapus.")
+                                print(f"File sumber untuk batch {guid_survey} telah dihapus dari lokal.")
 
                             try:
                                 shutil.move(local_result_path, os.path.join(LOCAL_RESULT_DIR, result_filename))
