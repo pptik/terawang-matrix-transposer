@@ -1,27 +1,22 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[675]:
-
-
 import numpy as np
 import scipy
-import codecs, json 
-
-
-# In[676]:
-
+import json
+import codecs
 
 def loadcsv(filename, delim=","):
     # Reads CSV from file
     arr = np.loadtxt(filename, delimiter=delim, dtype= np.float64)
     return arr
 
+def loadjson(filename):
+    # Reads JSON from file
+    f = open(filename)
+    data = json.load(f)
+    # Returns as dict
+    return data
 
-# In[677]:
-
-
-def gcc(sig, refsig, fs=1000000, interp=128, max_tau=None, CCType="PHAT", which=None, timestamp=None):
+def gcc(sig, refsig, fs=1000000, interp=128, max_tau=None, CCType="PHAT", timestamp=None):
+    
     '''
     This function computes the offset between the signal sig and the reference signal refsig
     using the Generalized Cross Correlation - Phase Transform (GCC-PHAT)method.
@@ -115,25 +110,21 @@ def gcc(sig, refsig, fs=1000000, interp=128, max_tau=None, CCType="PHAT", which=
     
     return np.abs(tau), cc, lags
 
-
-# In[678]:
-
-
-def onetap(sigarray, which, diameter):
+def onetap(sigdict, which, diameter):
     
     # function to tap once. produces 7 ToF/tau from 7 CC, out of 8 sensors
     
     # diameters in meters
     
-    sig1 = sigarray[:,0]
-    sig2 = sigarray[:,1]
-    sig3 = sigarray[:,2]
-    sig4 = sigarray[:,3]
-    sig5 = sigarray[:,4]
-    sig6 = sigarray[:,5]
-    sig7 = sigarray[:,6]
-    sig8 = sigarray[:,7]
-    timestamp = sigarray[:,8]
+    sig1 = sigdict["value1"]
+    sig2 = sigdict["value2"]
+    sig3 = sigdict["value3"]
+    sig4 = sigdict["value4"]
+    sig5 = sigdict["value5"]
+    sig6 = sigdict["value6"]
+    sig7 = sigdict["value7"]
+    sig8 = sigdict["value8"]
+    timestamp = sigdict["timestamp"]
         
     radius = diameter/2
     ab = radius * 0.76536686473 # sqrt(sqrt(2)-2)
@@ -284,11 +275,7 @@ def onetap(sigarray, which, diameter):
             
             return np.array((velo81, velo82, velo83, velo84, velo85, velo86, velo87, 0), dtype=np.float32)
         case _:
-            raise ValueError
-
-
-# In[679]:
-
+            raise ValueError("Invalid number. Expected between 1 and 8")
 
 def onebyeight(sensarray,which,diameter):
     
@@ -298,40 +285,18 @@ def onebyeight(sensarray,which,diameter):
     
     return onetap(sensarray,which=which,diameter=diameter)
 
+ketuk1 = loadjson("Terawang_percobaan_1.json")
+ketuk2 = loadjson("Terawang_percobaan_2.json")
+ketuk3 = loadjson("Terawang_percobaan_3.json")
+ketuk4 = loadjson("Terawang_percobaan_4.json")
+ketuk5 = loadjson("Terawang_percobaan_5.json")
+ketuk6 = loadjson("Terawang_percobaan_6.json")
+ketuk7 = loadjson("Terawang_percobaan_7.json")
+ketuk8 = loadjson("Terawang_percobaan_8.json")
 
-# In[680]:
-
-
-def eightbyeight(taparray):
-    
-    tap1 = taparray[0]
-    tap2 = taparray[1]
-    tap3 = taparray[2]
-    tap4 = taparray[3]
-    tap5 = taparray[4]
-    tap6 = taparray[5]
-    tap7 = taparray[6]
-    tap8 = taparray[7]
-    
-    # function to make the 8x8 matrix of all taps combined
-    
-    return np.vstack((tap1, tap2, tap3, tap4, tap5, tap6, tap7, tap8))
-
-
-# In[ ]:
-
-
-ketuk1 = loadcsv(".\\ketuk1.csv")
-ketuk2 = loadcsv(".\\ketuk2.csv")
-ketuk3 = loadcsv(".\\ketuk3.csv")
-ketuk4 = loadcsv(".\\ketuk4.csv")
-ketuk5 = loadcsv(".\\ketuk5.csv")
-ketuk6 = loadcsv(".\\ketuk6.csv")
-ketuk7 = loadcsv(".\\ketuk7.csv")
-ketuk8 = loadcsv(".\\ketuk8.csv")
 
 veloketuk1 = onebyeight(ketuk1,1,0.3)
-veloketuk2 = onebyeight(ketuk3,2,0.3)
+veloketuk2 = onebyeight(ketuk2,2,0.3)
 veloketuk3 = onebyeight(ketuk3,3,0.3)
 veloketuk4 = onebyeight(ketuk4,4,0.3)
 veloketuk5 = onebyeight(ketuk5,5,0.3)
@@ -351,5 +316,3 @@ json.dump(beloall, codecs.open(file_path, 'w', encoding='utf-8'),
 
 print(veloall)
 
-
-# End of the line

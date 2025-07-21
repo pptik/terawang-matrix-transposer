@@ -119,7 +119,8 @@ def gcc(sig, refsig, fs=1000000, CCType="PHAT", max_tau=None):
 
 def onetap(sigarray, which, diameter):
     """Menghitung kecepatan dari satu set data ketukan."""
-    sensors = [sigarray[:, i] for i in range(8)]
+    sensors = [(sigarray[:, i] for i in range(8))] # Cuts through sigarray (which is a 2d Array) 
+    # and returms them to sensors per column 
     radius = diameter / 2
     distances = {
         (1,2): radius * 0.765, (1,3): radius * 1.414, (1,4): radius * 1.847, (1,5): diameter,
@@ -141,6 +142,10 @@ def onetap(sigarray, which, diameter):
         if i == (which - 1): continue
         sig = sensors[i]
         pair = tuple(sorted((which, i + 1)))
+        if len(pair) != 2 or not all(isinstance(x, int) for x in pair):
+            raise ValueError("Pair must be a tuple of two integers")
+        if pair not in distances:
+            raise ValueError(f"Pair {pair} not found in distances dictionary")
         dist = distances.get(pair)
         if dist is None: continue
         tof = gcc(refsig=refsig, sig=sig)[0]
@@ -156,15 +161,15 @@ def process_batch(file_paths, diameter):
     sorted_paths = sorted(file_paths)
     for i, filepath in enumerate(sorted_paths, start=1):
         sigarray = load_sigarray_from_json(filepath)
-        if sigarray is None:
+        if sigarray is not None:
+            velocity_row = onetap(sigarray, which=i, diameter=diameter)
+            all_velocity_rows.append(velocity_row)
+        else:
             print(f"Gagal memproses {filepath}, baris akan diisi nol.")
             all_velocity_rows.append(np.zeros(8, dtype=np.float32))
-            continue
-        
-        velocity_row = onetap(sigarray, which=i, diameter=diameter)
-        all_velocity_rows.append(velocity_row)
+            continue        
     
-    return np.stack(all_velocity_rows)
+    return np.vstack(all_velocity_rows)
 
 def publish_to_rabbitmq(message, queue_name):
     """Mempublikasikan pesan ke antrian RabbitMQ yang spesifik."""
