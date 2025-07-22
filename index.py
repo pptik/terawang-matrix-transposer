@@ -24,20 +24,20 @@ LOCAL_RESULT_DIR = "hasil_proses_lokal"
 LOCAL_TEMP_DIR = "temp_data" # Folder untuk mengunduh file & menyimpan hasil sementara
 
 # Akses FTP
-FTP_HOST = os.getenv("FTP_HOST")
+FTP_HOST = os.getenv("FTP_HOST", "ftp-sth.pptik.id")
 FTP_PORT = int(os.getenv("FTP_PORT", 2121))
-FTP_USER = os.getenv("FTP_USER")
-FTP_PASSWORD = os.getenv("FTP_PASSWORD")
+FTP_USER = os.getenv("FTP_USER", "terawang")
+FTP_PASSWORD = os.getenv("FTP_PASSWORD", "Terawang@#2025")
 FTP_SOURCE_FOLDER = os.getenv("FTP_SOURCE_FOLDER", "/terawang") # Folder sumber di FTP
 FTP_FOLDER_HASIL = os.getenv("FTP_FOLDER_HASIL", "/result")
 FTP_FOLDER_DATA_ROW = os.getenv("FTP_FOLDER_DATA_ROW", "/data_row")
 
 # Akses RabbitMQ
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rmq230.pptik.id")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
-RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME")
-RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
-RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST")
+RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME", "terawang")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "Terawang@#2025")
+RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/terawang")
 RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE_RESULT", "result_queue")
 RABBITMQ_GRAPH_QUEUE = os.getenv("RABBITMQ_GRAPH_QUEUE", "graph_row")
 
@@ -68,6 +68,11 @@ def load_sigarray_from_json(filename):
             key = f'value{i}'
             if key in item:
                 all_sensor_data[key] = item[key]
+                
+    try:
+        if timestamp_data is None or len(all_sensor_data) != 8:
+        print(f"Error: Data tidak lengkap di file {filename}")
+        return None
     
     if timestamp_data is None or len(all_sensor_data) != 8:
         print(f"Error: Data tidak lengkap di file {filename}")
