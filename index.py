@@ -2,8 +2,6 @@
 # coding: utf-8
 
 import numpy as np
-import scipy.ndimage
-import scipy.signal
 import codecs, json
 import time
 import os
