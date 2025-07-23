@@ -35,7 +35,7 @@ Pastikan Anda membuat struktur folder berikut di direktori yang sama dengan skri
 
     ```bash
     python -m venv venv
-    source venv/bin/activate  # Di Windows: venv\Scripts\activate
+    source venv/bin/activate  # Di Windows: ./venv/Scripts/activate
     ```
 
 3.  **Instal Dependensi**

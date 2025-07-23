@@ -2,12 +2,11 @@
 # coding: utf-8
 
 import numpy as np
-import scipy.ndimage
-import scipy.signal
 import codecs, json
 import time
 import os
 import pika
+import scipy
 import uuid # Ditambahkan untuk menghasilkan UUID
 from ftplib import FTP
 from collections import defaultdict
@@ -26,20 +25,20 @@ LOCAL_RESULT_DIR = "hasil_proses_lokal"
 LOCAL_TEMP_DIR = "temp_data" # Folder untuk mengunduh file & menyimpan hasil sementara
 
 # Akses FTP
-FTP_HOST = os.getenv("FTP_HOST")
+FTP_HOST = os.getenv("FTP_HOST", "ftp-sth.pptik.id")
 FTP_PORT = int(os.getenv("FTP_PORT", 2121))
-FTP_USER = os.getenv("FTP_USER")
-FTP_PASSWORD = os.getenv("FTP_PASSWORD")
+FTP_USER = os.getenv("FTP_USER", "terawang")
+FTP_PASSWORD = os.getenv("FTP_PASSWORD", "Terawang@#2025")
 FTP_SOURCE_FOLDER = os.getenv("FTP_SOURCE_FOLDER", "/terawang") # Folder sumber di FTP
 FTP_FOLDER_HASIL = os.getenv("FTP_FOLDER_HASIL", "/result")
 FTP_FOLDER_DATA_ROW = os.getenv("FTP_FOLDER_DATA_ROW", "/data_row")
 
 # Akses RabbitMQ
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "rmq230.pptik.id")
 RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT", 5672))
-RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME")
-RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
-RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST")
+RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME", "terawang")
+RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD", "Terawang@#2025")
+RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST", "/terawang")
 RABBITMQ_QUEUE = os.getenv("RABBITMQ_QUEUE_RESULT", "result_queue")
 RABBITMQ_GRAPH_QUEUE = os.getenv("RABBITMQ_GRAPH_QUEUE", "graph_row")
 
@@ -70,11 +69,14 @@ def load_sigarray_from_json(filename):
             key = f'value{i}'
             if key in item:
                 all_sensor_data[key] = item[key]
-    
-    if timestamp_data is None or len(all_sensor_data) != 8:
-        print(f"Error: Data tidak lengkap di file {filename}")
+                
+    try:
+        if timestamp_data is None or len(all_sensor_data) != 8:
+            raise ValueError(f"Error: Data tidak lengkap di file {filename}")
+    except ValueError as ve:
+        print(ve)
         return None
-
+            
     try:
         sensor_arrays = [all_sensor_data[f'value{i}'] for i in range(1, 9)]
         arrays_to_stack = sensor_arrays + [timestamp_data]
@@ -85,41 +87,79 @@ def load_sigarray_from_json(filename):
         print(f"Error saat menyusun numpy array: {e}")
         return None
 
-def gcc(sig, refsig, fs=1000000, CCType="PHAT", max_tau=None):
+def gcc(sig, refsig, fs=1000000, max_tau=None, interp=128, timestamp=None):
     """Menghitung Generalized Cross-Correlation."""
+    
+    # Generalized Cross Correlation Phase Transform
     n = len(sig)
-    sig = sig - np.mean(sig)
-    refsig = refsig - np.mean(refsig)
-
-    SIG = np.fft.rfft(sig, n=n)
-    REFSIG = np.fft.rfft(refsig, n=n)
+    
+    # Remove DC component
+    sig = sig - np.mean(sig, axis=0)
+    refsig = refsig - np.mean(refsig, axis=0)
+    
+    # RFFT because it's faster, it doesn't compute the negative side
+    SIG = np.fft.rfft(sig, axis=0, n=n)
+    REFSIG = np.fft.rfft(refsig, axis=0, n=n)
     R = SIG * np.conj(REFSIG)
     
-    if CCType.upper() == "PHAT":
-        WEIGHT = 1 / (np.abs(R) + 1e-10)
-    else:
-        WEIGHT = 1.0
+    WEIGHT = 1 / (np.abs(R) + 1e-10) # No need to use anything else other than PHAT
     
     Integ = R * WEIGHT
-    cc = np.fft.irfft(Integ, n=n)
-    cc = np.fft.fftshift(cc)
+    cc = np.fft.irfft(Integ, axis=0, n=n)
+    lags = scipy.signal.correlation_lags(len(sig), len(refsig), mode= 'same')
 
-    if max_tau is not None:
-        max_shift = int(fs * max_tau)
-    else:
-        max_shift = n // 2
+    max_shift = int(interp * n / 2)
+    
+    if max_tau:
+        max_shift = min(int(interp * fs * max_tau), max_shift)
 
-    center_index = n // 2
-    search_range = slice(center_index - max_shift, center_index + max_shift)
+    smallcc = np.concatenate((cc[-max_shift:], cc[:max_shift+1]))
+    smallcc /= np.max(cc)
     
-    shift = np.argmax(np.abs(cc[search_range])) - max_shift
-    tau = shift / float(fs)
+    # find max cross correlation index
+    shift = np.argmax(smallcc) - max_shift
     
-    return np.abs(tau), cc, None
+    # Sometimes, there is a 180-degree phase difference between the two microphones.
+    # shift = np.argmax(np.abs(cc)) - max_shift
+    
+    cc = scipy.ndimage.shift(cc, len(cc)/2, mode="grid-wrap", order = 5)
+    cc /= np.max(cc)
+    
+    tau = shift / float(interp * fs)
+    
+    if timestamp is not None:
+        
+        peaktimestamp = timestamp[np.argmax(cc)]
+        
+        timestamp = scipy.ndimage.shift(timestamp, len(timestamp)/2, mode="grid-wrap", order = 5)
+        
+        a = timestamp[0] # first possible timestamp on the dataframe
+        b = timestamp[max_shift] # timestamp that corresponds fo the end of smalltimestamp 
+        c = timestamp[-max_shift-1] # timestamp that corresponds to the start of the smalltimestamp
+        d = timestamp[-1] # last possible timestamp on the dataframe
+        # smalltimestamp = np.concatenate((timestamp[-max_shift:], timestamp[:max_shift+1]))
+        # peaktimestamp = smalltimestamp[np.argmax(smallcc)]
+        
+        
+        
+        
+        
+        print(peaktimestamp)
+        
+        if a > peaktimestamp >=  b:
+            tau = int(peaktimestamp - a) # in micros
+        else:
+            tau = int(-peaktimestamp + c) # in micros, negative
+        tau /= 1000000 # convert to seconds
+
+    tau /= 10
+    
+    return np.abs(tau), cc, lags
 
 def onetap(sigarray, which, diameter):
     """Menghitung kecepatan dari satu set data ketukan."""
-    sensors = [sigarray[:, i] for i in range(8)]
+    sensors = [(sigarray[:, i] for i in range(8))] # Cuts through sigarray (which is a 2d Array) 
+    # and returms them to sensors per column 
     radius = diameter / 2
     distances = {
         (1,2): radius * 0.765, (1,3): radius * 1.414, (1,4): radius * 1.847, (1,5): diameter,
@@ -141,6 +181,10 @@ def onetap(sigarray, which, diameter):
         if i == (which - 1): continue
         sig = sensors[i]
         pair = tuple(sorted((which, i + 1)))
+        if len(pair) != 2 or not all(isinstance(x, int) for x in pair):
+            raise ValueError("Pair must be a tuple of two integers")
+        if pair not in distances:
+            raise ValueError(f"Pair {pair} not found in distances dictionary")
         dist = distances.get(pair)
         if dist is None: continue
         tof = gcc(refsig=refsig, sig=sig)[0]
@@ -156,15 +200,15 @@ def process_batch(file_paths, diameter):
     sorted_paths = sorted(file_paths)
     for i, filepath in enumerate(sorted_paths, start=1):
         sigarray = load_sigarray_from_json(filepath)
-        if sigarray is None:
+        if sigarray is not None:
+            velocity_row = onetap(sigarray, which=i, diameter=diameter)
+            all_velocity_rows.append(velocity_row)
+        else:
             print(f"Gagal memproses {filepath}, baris akan diisi nol.")
             all_velocity_rows.append(np.zeros(8, dtype=np.float32))
-            continue
-        
-        velocity_row = onetap(sigarray, which=i, diameter=diameter)
-        all_velocity_rows.append(velocity_row)
+            continue        
     
-    return np.stack(all_velocity_rows)
+    return np.vstack(all_velocity_rows)
 
 def publish_to_rabbitmq(message, queue_name):
     """Mempublikasikan pesan ke antrian RabbitMQ yang spesifik."""

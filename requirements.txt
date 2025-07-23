@@ -1,4 +1,4 @@
-numpy
-scipy
+numpy==2.3
+scipy==1.15.3
 pika
 python-dotenv
