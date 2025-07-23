@@ -2,6 +2,10 @@
 
 Skrip ini berfungsi sebagai layanan latar belakang (daemon) yang secara otomatis memproses data sensor tomografi.
 
+## Update
+
+Perbaikan AI-written code pada function `gcc` dan `onetap`.
+
 ## Alur Kerja
 
 1.  **Memonitor**: Terus-menerus memonitor folder `data_mentah` untuk file JSON baru.
