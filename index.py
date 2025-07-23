@@ -6,6 +6,7 @@ import codecs, json
 import time
 import os
 import pika
+import scipy
 import uuid # Ditambahkan untuk menghasilkan UUID
 from ftplib import FTP
 from collections import defaultdict
@@ -86,37 +87,74 @@ def load_sigarray_from_json(filename):
         print(f"Error saat menyusun numpy array: {e}")
         return None
 
-def gcc(sig, refsig, fs=1000000, CCType="PHAT", max_tau=None):
+def gcc(sig, refsig, fs=1000000, max_tau=None, interp=128, timestamp=None):
     """Menghitung Generalized Cross-Correlation."""
+    
+    # Generalized Cross Correlation Phase Transform
     n = len(sig)
-    sig = sig - np.mean(sig)
-    refsig = refsig - np.mean(refsig)
-
-    SIG = np.fft.rfft(sig, n=n)
-    REFSIG = np.fft.rfft(refsig, n=n)
+    
+    # Remove DC component
+    sig = sig - np.mean(sig, axis=0)
+    refsig = refsig - np.mean(refsig, axis=0)
+    
+    # RFFT because it's faster, it doesn't compute the negative side
+    SIG = np.fft.rfft(sig, axis=0, n=n)
+    REFSIG = np.fft.rfft(refsig, axis=0, n=n)
     R = SIG * np.conj(REFSIG)
     
-    if CCType.upper() == "PHAT":
-        WEIGHT = 1 / (np.abs(R) + 1e-10)
-    else:
-        WEIGHT = 1.0
+    WEIGHT = 1 / (np.abs(R) + 1e-10) # No need to use anything else other than PHAT
     
     Integ = R * WEIGHT
-    cc = np.fft.irfft(Integ, n=n)
-    cc = np.fft.fftshift(cc)
+    cc = np.fft.irfft(Integ, axis=0, n=n)
+    lags = scipy.signal.correlation_lags(len(sig), len(refsig), mode= 'same')
 
-    if max_tau is not None:
-        max_shift = int(fs * max_tau)
-    else:
-        max_shift = n // 2
+    max_shift = int(interp * n / 2)
+    
+    if max_tau:
+        max_shift = min(int(interp * fs * max_tau), max_shift)
 
-    center_index = n // 2
-    search_range = slice(center_index - max_shift, center_index + max_shift)
+    smallcc = np.concatenate((cc[-max_shift:], cc[:max_shift+1]))
+    smallcc /= np.max(cc)
     
-    shift = np.argmax(np.abs(cc[search_range])) - max_shift
-    tau = shift / float(fs)
+    # find max cross correlation index
+    shift = np.argmax(smallcc) - max_shift
     
-    return np.abs(tau), cc, None
+    # Sometimes, there is a 180-degree phase difference between the two microphones.
+    # shift = np.argmax(np.abs(cc)) - max_shift
+    
+    cc = scipy.ndimage.shift(cc, len(cc)/2, mode="grid-wrap", order = 5)
+    cc /= np.max(cc)
+    
+    tau = shift / float(interp * fs)
+    
+    if timestamp is not None:
+        
+        peaktimestamp = timestamp[np.argmax(cc)]
+        
+        timestamp = scipy.ndimage.shift(timestamp, len(timestamp)/2, mode="grid-wrap", order = 5)
+        
+        a = timestamp[0] # first possible timestamp on the dataframe
+        b = timestamp[max_shift] # timestamp that corresponds fo the end of smalltimestamp 
+        c = timestamp[-max_shift-1] # timestamp that corresponds to the start of the smalltimestamp
+        d = timestamp[-1] # last possible timestamp on the dataframe
+        # smalltimestamp = np.concatenate((timestamp[-max_shift:], timestamp[:max_shift+1]))
+        # peaktimestamp = smalltimestamp[np.argmax(smallcc)]
+        
+        
+        
+        
+        
+        print(peaktimestamp)
+        
+        if a > peaktimestamp >=  b:
+            tau = int(peaktimestamp - a) # in micros
+        else:
+            tau = int(-peaktimestamp + c) # in micros, negative
+        tau /= 1000000 # convert to seconds
+
+    tau /= 10
+    
+    return np.abs(tau), cc, lags
 
 def onetap(sigarray, which, diameter):
     """Menghitung kecepatan dari satu set data ketukan."""
