@@ -71,13 +71,11 @@ def load_sigarray_from_json(filename):
                 
     try:
         if timestamp_data is None or len(all_sensor_data) != 8:
-        print(f"Error: Data tidak lengkap di file {filename}")
+            raise ValueError(f"Error: Data tidak lengkap di file {filename}")
+    except ValueError as ve:
+        print(ve)
         return None
-    
-    if timestamp_data is None or len(all_sensor_data) != 8:
-        print(f"Error: Data tidak lengkap di file {filename}")
-        return None
-
+            
     try:
         sensor_arrays = [all_sensor_data[f'value{i}'] for i in range(1, 9)]
         arrays_to_stack = sensor_arrays + [timestamp_data]
