@@ -50,22 +50,26 @@ Pastikan Anda membuat struktur folder berikut di direktori yang sama dengan skri
     ```
 
 4.  **Buat File Konfigurasi `.env`**
-    Buat file baru bernama `.env` di direktori yang sama dengan `main.py`. Salin konten dari file `.env.example` ke dalamnya dan isi dengan kredensial Anda yang sebenarnya.
+    Buat file baru bernama `.env` di direktori yang sama dengan `index.py`. Salin konten dari file `.env.example` ke dalamnya dan isi dengan kredensial Anda yang sebenarnya.
 
     ```dotenv
     # Konten untuk file .env
-    FTP_HOST=""
-    FTP_PORT=2121
-    FTP_USER=""
-    FTP_PASSWORD=""
-    FTP_FOLDER_HASIL="/result"
 
-    RABBITMQ_HOST="r"
+    FTP_HOST="(HOST)"
+    FTP_PORT=21
+    FTP_USER="(USER)"
+    FTP_PASSWORD="(PASS)"
+    FTP_FOLDER_HASIL="/results"
+    FTP_SOURCE_FOLDER="/source"
+    FTP_FOLDER_DATA_ROW="/data_row"
+
+    RABBITMQ_HOST="(HOST)"
     RABBITMQ_PORT=5672
-    RABBITMQ_USERNAME=""
-    RABBITMQ_PASSWORD=""
-    RABBITMQ_VHOST="/terawang"
-    RABBITMQ_QUEUE="result_queue"
+    RABBITMQ_USERNAME="(USER)"
+    RABBITMQ_PASSWORD="(PASS)"
+    RABBITMQ_VHOST="/vhost"
+    RABBITMQ_QUEUE="(RESULT)"
+    RABBITMQ_GRAPH_QUEUE="(GRAPH)"
     ```
 
 ## Menjalankan Layanan
