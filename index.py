@@ -449,9 +449,10 @@ def main():
                                 local_result_path = os.path.join(LOCAL_TEMP_DIR, result_filename)
                                 
                                 velo_matrix = process_batch(local_paths, DIAMETER)
-                                velo_list = np.nan_to_num(velo_matrix, posinf=0).tolist()
+                                # You don't need a nan_to_num if you make your code correctly
+                                jsonpayload = {"species":"Mahoni","keliling":155.8,"jumlah_sensor":8,"ketinggian":1,"data_pengukuran": velo_matrix}
                                 with codecs.open(local_result_path, 'w', encoding='utf-8') as f:
-                                    json.dump(velo_list, f, indent=4)
+                                    json.dumps(jsonpayload)
                                 
                                 # Unggah file hasil ke FTP
                                 if upload_to_ftp(ftp, local_result_path, result_filename, FTP_FOLDER_HASIL):
