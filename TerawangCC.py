@@ -1,21 +1,21 @@
 import numpy as np
+import pandas as pd
 import scipy
 import json
 import codecs
 
 def loadcsv(filename, delim=","):
     # Reads CSV from file
-    arr = np.loadtxt(filename, delimiter=delim, dtype= np.float64)
-    return arr
+    data = np.loadtxt(filename, delimiter=delim, dtype= np.float64)
+    return data
 
 def loadjson(filename):
     # Reads JSON from file
-    f = open(filename)
-    data = json.load(f)
+    data = json.load(open(filename))
     # Returns as dict
     return data
 
-def gcc(sig, refsig, fs=1000000, interp=128, max_tau=None, CCType="PHAT", timestamp=None):
+def gcc(sig, refsig, fs=1000000, interp=128, max_tau=None, CCType="PHAT", which=None, timestamp=None):
     
     '''
     This function computes the offset between the signal sig and the reference signal refsig
@@ -110,21 +110,21 @@ def gcc(sig, refsig, fs=1000000, interp=128, max_tau=None, CCType="PHAT", timest
     
     return np.abs(tau), cc, lags
 
-def onetap(sigdict, which, diameter):
+def onetap(sigdict: list, which: int, diameter = 0.3):
     
     # function to tap once. produces 7 ToF/tau from 7 CC, out of 8 sensors
     
     # diameters in meters
     
-    sig1 = sigdict["value1"]
-    sig2 = sigdict["value2"]
-    sig3 = sigdict["value3"]
-    sig4 = sigdict["value4"]
-    sig5 = sigdict["value5"]
-    sig6 = sigdict["value6"]
-    sig7 = sigdict["value7"]
-    sig8 = sigdict["value8"]
-    timestamp = sigdict["timestamp"]
+    sig1 = sigdict[0].get("value1")
+    sig2 = sigdict[1].get("value2")
+    sig3 = sigdict[2].get("value3")
+    sig4 = sigdict[3].get("value4")
+    sig5 = sigdict[4].get("value5")
+    sig6 = sigdict[5].get("value6")
+    sig7 = sigdict[6].get("value7")
+    sig8 = sigdict[7].get("value8")
+    timestamp = sigdict[8].get("timestamp")
         
     radius = diameter/2
     ab = radius * 0.76536686473 # sqrt(sqrt(2)-2)
@@ -275,7 +275,7 @@ def onetap(sigdict, which, diameter):
             
             return np.array((velo81, velo82, velo83, velo84, velo85, velo86, velo87, 0), dtype=np.float32)
         case _:
-            raise ValueError("Invalid number. Expected between 1 and 8")
+            return ValueError
 
 def onebyeight(sensarray,which,diameter):
     
@@ -285,29 +285,29 @@ def onebyeight(sensarray,which,diameter):
     
     return onetap(sensarray,which=which,diameter=diameter)
 
-ketuk1 = loadjson("Terawang_percobaan_1.json")
-ketuk2 = loadjson("Terawang_percobaan_2.json")
-ketuk3 = loadjson("Terawang_percobaan_3.json")
-ketuk4 = loadjson("Terawang_percobaan_4.json")
-ketuk5 = loadjson("Terawang_percobaan_5.json")
-ketuk6 = loadjson("Terawang_percobaan_6.json")
-ketuk7 = loadjson("Terawang_percobaan_7.json")
-ketuk8 = loadjson("Terawang_percobaan_8.json")
+ketuk1 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_1.json")
+ketuk2 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_2.json")
+ketuk3 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_3.json")
+ketuk4 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_4.json")
+ketuk5 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_5.json")
+ketuk6 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_6.json")
+ketuk7 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_7.json")
+ketuk8 = loadjson(".\\ToF_Worker\\Terawang_percobaan_8.json")
 
 
-veloketuk1 = onebyeight(ketuk1,1,0.3)
-veloketuk2 = onebyeight(ketuk2,2,0.3)
-veloketuk3 = onebyeight(ketuk3,3,0.3)
-veloketuk4 = onebyeight(ketuk4,4,0.3)
-veloketuk5 = onebyeight(ketuk5,5,0.3)
-veloketuk6 = onebyeight(ketuk6,6,0.3)
-veloketuk7 = onebyeight(ketuk7,7,0.3)
-veloketuk8 = onebyeight(ketuk8,8,0.3)
+veloketuk1 = onetap(ketuk1,1,0.3)
+veloketuk2 = onetap(ketuk2,1,0.3)
+veloketuk3 = onetap(ketuk3,1,0.3)
+veloketuk4 = onetap(ketuk4,1,0.3)
+veloketuk5 = onetap(ketuk5,1,0.3)
+veloketuk6 = onetap(ketuk6,1,0.3)
+veloketuk7 = onetap(ketuk7,1,0.3)
+veloketuk8 = onetap(ketuk8,1,0.3)
 
-veloall = np.vstack((veloketuk1,veloketuk2,veloketuk3,veloketuk4,veloketuk5,veloketuk6,veloketuk7,veloketuk8))
+veloall = np.vstack((veloketuk1,veloketuk2,veloketuk3,veloketuk4,veloketuk5,veloketuk6,veloketuk7,veloketuk8), dtype=float)
 
 beloall = veloall.tolist()
-file_path = ".//contoh.json"
+file_path = ".//ToF_Worker//contoh.json"
 json.dump(beloall, codecs.open(file_path, 'w', encoding='utf-8'), 
           separators=(',', ':'), 
           sort_keys=True, 
