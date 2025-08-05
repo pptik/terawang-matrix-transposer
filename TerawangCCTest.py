@@ -83,9 +83,9 @@ def gcc(sig, refsig, fs=1000000, interp=128, max_tau=None, CCType="PHAT", which=
     
     if timestamp is not None:
         
-        peaktimestamp = timestamp[np.argmax(cc)]
+        peaktimestamp = timestamp[np.argmax(cc)] # peak of CC within timetamp
         
-        timestamp = scipy.ndimage.shift(timestamp, len(timestamp)/2, mode="grid-wrap", order = 5)
+        timestamp = scipy.ndimage.shift(timestamp, len(timestamp)/2, mode="grid-wrap", order = 5) # shift the timestamp to 'wrap around'
         
         a = timestamp[0] # first possible timestamp on the dataframe
         b = timestamp[max_shift] # timestamp that corresponds fo the end of smalltimestamp 
@@ -93,10 +93,6 @@ def gcc(sig, refsig, fs=1000000, interp=128, max_tau=None, CCType="PHAT", which=
         d = timestamp[-1] # last possible timestamp on the dataframe
         # smalltimestamp = np.concatenate((timestamp[-max_shift:], timestamp[:max_shift+1]))
         # peaktimestamp = smalltimestamp[np.argmax(smallcc)]
-        
-        
-        
-        
         
         print(peaktimestamp)
         
@@ -275,7 +271,7 @@ def onetap(sigdict: list, which: int, diameter = 0.3):
             
             return np.array((velo81, velo82, velo83, velo84, velo85, velo86, velo87, 0), dtype=np.float32)
         case _:
-            return ValueError
+            raise ValueError
 
 def onebyeight(sensarray,which,diameter):
     

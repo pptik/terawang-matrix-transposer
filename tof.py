@@ -13,8 +13,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- KONFIGURASI DARI .ENV ---
-RABBITMQ_HOST = os.getenv("RABBITMQ_HOST")
-RABBITMQ_PORT = int(os.getenv("RABBITMQ_PORT"))
+RABBITMQ_HOST = os.getenv("RABBITMQ_HOST", "Value")
+RABBITMQ_PORT = os.getenv("RABBITMQ_PORT")
 RABBITMQ_USERNAME = os.getenv("RABBITMQ_USERNAME")
 RABBITMQ_PASSWORD = os.getenv("RABBITMQ_PASSWORD")
 RABBITMQ_VHOST = os.getenv("RABBITMQ_VHOST")
@@ -22,7 +22,7 @@ RABBITMQ_INPUT_QUEUE = os.getenv("RABBITMQ_INPUT_QUEUE")
 RABBITMQ_RESULT_QUEUE = os.getenv("RABBITMQ_RESULT_QUEUE")
 
 FTP_HOST = os.getenv("FTP_HOST")
-FTP_PORT = int(os.getenv("FTP_PORT"))
+FTP_PORT = os.getenv("FTP_PORT")
 FTP_USER = os.getenv("FTP_USER")
 FTP_PASSWORD = os.getenv("FTP_PASSWORD")
 FTP_SOURCE_FOLDER = os.getenv("FTP_SOURCE_FOLDER")
@@ -85,6 +85,8 @@ def gcc(sig, refsig, fs=1000000, CCType="PHAT", **kwargs):
 
     # Perhitungan tau yang disederhanakan dan diperbaiki
     tau = shift / float(fs)
+    
+    tau /= 10
     
     # Mengembalikan nilai absolut tau
     return np.abs(tau), cc, lags
@@ -205,8 +207,6 @@ def onetap(sigdict, which, diameter):
         case _:
             raise ValueError("Nomor 'ketuk' tidak valid. Harap masukkan angka antara 1 dan 8.")
 
-def onebyeight(sensarray, which, diameter):
-    return onetap(sensarray, which=which, diameter=diameter)
 
 # ====================================================================
 # FUNGSI HELPER (TIDAK DIUBAH)
@@ -304,7 +304,7 @@ def callback(ch, method, properties, body):
             print(f"  🔬 Memulai perhitungan untuk ketuk #{ketuk_ke} dengan sensor referensi #{sensor_referensi}...")
             
             # Memanggil fungsi perhitungan dengan sensor referensi yang benar
-            velo_result = onebyeight(data_dict, sensor_referensi, 0.3)
+            velo_result = onetap(data_dict, sensor_referensi, 0.3)
             
             # Mengganti nilai non-finite dengan 0.0
             velo_result = np.nan_to_num(velo_result, nan=0.0, posinf=0.0, neginf=0.0)
