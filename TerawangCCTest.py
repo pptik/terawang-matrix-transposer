@@ -281,29 +281,29 @@ def onebyeight(sensarray,which,diameter):
     
     return onetap(sensarray,which=which,diameter=diameter)
 
-ketuk1 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_1.json")
-ketuk2 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_2.json")
-ketuk3 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_3.json")
-ketuk4 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_4.json")
-ketuk5 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_5.json")
-ketuk6 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_6.json")
-ketuk7 = loadjson(".\\ToF_Worker.\\Terawang_percobaan_7.json")
-ketuk8 = loadjson(".\\ToF_Worker\\Terawang_percobaan_8.json")
+ketuk1 = loadjson(".\\1754553587_1.json")
+ketuk2 = loadjson(".\\1754553619_2.json")
+ketuk3 = loadjson(".\\1754553659_3.json")
+ketuk4 = loadjson(".\\1754553718_4.json")
+ketuk5 = loadjson(".\\1754553836_5.json")
+ketuk6 = loadjson(".\\1754553905_6.json")
+ketuk7 = loadjson(".\\1754553953_7.json")
+ketuk8 = loadjson(".\\1754553987_8.json")
 
 
 veloketuk1 = onetap(ketuk1,1,0.3)
-veloketuk2 = onetap(ketuk2,1,0.3)
-veloketuk3 = onetap(ketuk3,1,0.3)
-veloketuk4 = onetap(ketuk4,1,0.3)
-veloketuk5 = onetap(ketuk5,1,0.3)
-veloketuk6 = onetap(ketuk6,1,0.3)
-veloketuk7 = onetap(ketuk7,1,0.3)
-veloketuk8 = onetap(ketuk8,1,0.3)
+veloketuk2 = onetap(ketuk2,2,0.3)
+veloketuk3 = onetap(ketuk3,3,0.3)
+veloketuk4 = onetap(ketuk4,4,0.3)
+veloketuk5 = onetap(ketuk5,5,0.3)
+veloketuk6 = onetap(ketuk6,6,0.3)
+veloketuk7 = onetap(ketuk7,7,0.3)
+veloketuk8 = onetap(ketuk8,8,0.3)
 
 veloall = np.vstack((veloketuk1,veloketuk2,veloketuk3,veloketuk4,veloketuk5,veloketuk6,veloketuk7,veloketuk8), dtype=float)
 
 beloall = veloall.tolist()
-file_path = ".//ToF_Worker//contoh.json"
+file_path = ".//contoh.json"
 json.dump(beloall, codecs.open(file_path, 'w', encoding='utf-8'), 
           separators=(',', ':'), 
           sort_keys=True, 
