@@ -62,7 +62,7 @@ def gcc(sig, refsig, fs=1000000, interp=128, max_tau=None, CCType="PHAT", which=
     lags = scipy.signal.correlation_lags(len(sig), len(refsig), mode= 'same')
 
     max_shift = int(interp * n / 2)
-    if max_tau:
+    if max_tau is not None:
         max_shift = min(int(interp * fs * max_tau), max_shift)
         
     
@@ -101,8 +101,6 @@ def gcc(sig, refsig, fs=1000000, interp=128, max_tau=None, CCType="PHAT", which=
         else:
             tau = int(-peaktimestamp + c) # in micros, negative
         tau /= 1000000 # convert to seconds
-
-    tau /= 10
     
     return np.abs(tau), cc, lags
 
@@ -121,12 +119,15 @@ def onetap(sigdict: list, which: int, diameter = 0.3):
     sig7 = sigdict[6].get("value7")
     sig8 = sigdict[7].get("value8")
     timestamp = sigdict[8].get("timestamp")
+    soundspeed = 4150 # Average speed of sound in wood
         
     radius = diameter/2
     ab = radius * 0.76536686473 # sqrt(sqrt(2)-2)
     ac = radius * 1.41421356237 # sqrt(2)
     ad = radius * 1.84775906502 # sqrt(sqrt(2)+2)
     ae = float(diameter)
+    
+    max_tau = 0.3 / soundspeed
     
     # ab = 12,23,34,45,56,67,78,81
     # ac = 13,24,35,46,57,68,71,82
@@ -135,13 +136,13 @@ def onetap(sigdict: list, which: int, diameter = 0.3):
     
     match which:
         case 1:
-            tof12 = gcc(refsig=sig1, sig=sig2, timestamp=None)[0]
-            tof13 = gcc(refsig=sig1, sig=sig3, timestamp=None)[0]
-            tof14 = gcc(refsig=sig1, sig=sig4, timestamp=None)[0]
-            tof15 = gcc(refsig=sig1, sig=sig5, timestamp=None)[0]
-            tof16 = gcc(refsig=sig1, sig=sig6, timestamp=None)[0]
-            tof17 = gcc(refsig=sig1, sig=sig7, timestamp=None)[0]
-            tof18 = gcc(refsig=sig1, sig=sig8, timestamp=None)[0]
+            tof12 = gcc(refsig=sig1, sig=sig2, timestamp=None, max_tau=max_tau)[0]
+            tof13 = gcc(refsig=sig1, sig=sig3, timestamp=None, max_tau=max_tau)[0]
+            tof14 = gcc(refsig=sig1, sig=sig4, timestamp=None, max_tau=max_tau)[0]
+            tof15 = gcc(refsig=sig1, sig=sig5, timestamp=None, max_tau=max_tau)[0]
+            tof16 = gcc(refsig=sig1, sig=sig6, timestamp=None, max_tau=max_tau)[0]
+            tof17 = gcc(refsig=sig1, sig=sig7, timestamp=None, max_tau=max_tau)[0]
+            tof18 = gcc(refsig=sig1, sig=sig8, timestamp=None, max_tau=max_tau)[0]
             velo12 = ab / tof12
             velo13 = ac / tof13
             velo14 = ad / tof14
@@ -152,13 +153,13 @@ def onetap(sigdict: list, which: int, diameter = 0.3):
             
             return np.array((0, velo12, velo13, velo14, velo15, velo16, velo17, velo18), dtype=np.float32)
         case 2:
-            tof21 = gcc(refsig=sig2, sig=sig1, timestamp=None)[0]
-            tof23 = gcc(refsig=sig2, sig=sig3, timestamp=None)[0]
-            tof24 = gcc(refsig=sig2, sig=sig4, timestamp=None)[0]
-            tof25 = gcc(refsig=sig2, sig=sig5, timestamp=None)[0]
-            tof26 = gcc(refsig=sig2, sig=sig6, timestamp=None)[0]
-            tof27 = gcc(refsig=sig2, sig=sig7, timestamp=None)[0]
-            tof28 = gcc(refsig=sig2, sig=sig8, timestamp=None)[0]
+            tof21 = gcc(refsig=sig2, sig=sig1, timestamp=None, max_tau=max_tau)[0]
+            tof23 = gcc(refsig=sig2, sig=sig3, timestamp=None, max_tau=max_tau)[0]
+            tof24 = gcc(refsig=sig2, sig=sig4, timestamp=None, max_tau=max_tau)[0]
+            tof25 = gcc(refsig=sig2, sig=sig5, timestamp=None, max_tau=max_tau)[0]
+            tof26 = gcc(refsig=sig2, sig=sig6, timestamp=None, max_tau=max_tau)[0]
+            tof27 = gcc(refsig=sig2, sig=sig7, timestamp=None, max_tau=max_tau)[0]
+            tof28 = gcc(refsig=sig2, sig=sig8, timestamp=None, max_tau=max_tau)[0]
             velo21 = ab / tof21
             velo23 = ab / tof23
             velo24 = ac / tof24
@@ -169,13 +170,13 @@ def onetap(sigdict: list, which: int, diameter = 0.3):
             
             return np.array((velo21, 0, velo23, velo24, velo25, velo26, velo27, velo28), dtype=np.float32)
         case 3:
-            tof31 = gcc(refsig=sig3, sig=sig1, timestamp=None)[0]
-            tof32 = gcc(refsig=sig3, sig=sig2, timestamp=None)[0]
-            tof34 = gcc(refsig=sig3, sig=sig4, timestamp=None)[0]
-            tof35 = gcc(refsig=sig3, sig=sig5, timestamp=None)[0]
-            tof36 = gcc(refsig=sig3, sig=sig6, timestamp=None)[0]
-            tof37 = gcc(refsig=sig3, sig=sig7, timestamp=None)[0]
-            tof38 = gcc(refsig=sig3, sig=sig8, timestamp=None)[0]
+            tof31 = gcc(refsig=sig3, sig=sig1, timestamp=None, max_tau=max_tau)[0]
+            tof32 = gcc(refsig=sig3, sig=sig2, timestamp=None, max_tau=max_tau)[0]
+            tof34 = gcc(refsig=sig3, sig=sig4, timestamp=None, max_tau=max_tau)[0]
+            tof35 = gcc(refsig=sig3, sig=sig5, timestamp=None, max_tau=max_tau)[0]
+            tof36 = gcc(refsig=sig3, sig=sig6, timestamp=None, max_tau=max_tau)[0]
+            tof37 = gcc(refsig=sig3, sig=sig7, timestamp=None, max_tau=max_tau)[0]
+            tof38 = gcc(refsig=sig3, sig=sig8, timestamp=None, max_tau=max_tau)[0]
             velo31 = ac / tof31
             velo32 = ab / tof32
             velo34 = ab / tof34
@@ -186,13 +187,13 @@ def onetap(sigdict: list, which: int, diameter = 0.3):
             
             return np.array((velo31, velo32, 0, velo34, velo35, velo36, velo37, velo38), dtype=np.float32) 
         case 4:
-            tof41 = gcc(refsig=sig4, sig=sig1, timestamp=None)[0]
-            tof42 = gcc(refsig=sig4, sig=sig2, timestamp=None)[0]
-            tof43 = gcc(refsig=sig4, sig=sig3, timestamp=None)[0]
-            tof45 = gcc(refsig=sig4, sig=sig5, timestamp=None)[0]
-            tof46 = gcc(refsig=sig4, sig=sig6, timestamp=None)[0]
-            tof47 = gcc(refsig=sig4, sig=sig7, timestamp=None)[0]
-            tof48 = gcc(refsig=sig4, sig=sig8, timestamp=None)[0]
+            tof41 = gcc(refsig=sig4, sig=sig1, timestamp=None, max_tau=max_tau)[0]
+            tof42 = gcc(refsig=sig4, sig=sig2, timestamp=None, max_tau=max_tau)[0]
+            tof43 = gcc(refsig=sig4, sig=sig3, timestamp=None, max_tau=max_tau)[0]
+            tof45 = gcc(refsig=sig4, sig=sig5, timestamp=None, max_tau=max_tau)[0]
+            tof46 = gcc(refsig=sig4, sig=sig6, timestamp=None, max_tau=max_tau)[0]
+            tof47 = gcc(refsig=sig4, sig=sig7, timestamp=None, max_tau=max_tau)[0]
+            tof48 = gcc(refsig=sig4, sig=sig8, timestamp=None, max_tau=max_tau)[0]
             velo41 = ad / tof41
             velo42 = ac / tof42
             velo43 = ab / tof43
@@ -203,13 +204,13 @@ def onetap(sigdict: list, which: int, diameter = 0.3):
             
             return np.array((velo41, velo42, velo43, 0, velo45, velo46, velo47, velo48), dtype=np.float32)
         case 5:
-            tof51 = gcc(refsig=sig5, sig=sig1, timestamp=None)[0]
-            tof52 = gcc(refsig=sig5, sig=sig2, timestamp=None)[0]
-            tof53 = gcc(refsig=sig5, sig=sig3, timestamp=None)[0]
-            tof54 = gcc(refsig=sig5, sig=sig4, timestamp=None)[0]
-            tof56 = gcc(refsig=sig5, sig=sig6, timestamp=None)[0]
-            tof57 = gcc(refsig=sig5, sig=sig7, timestamp=None)[0]
-            tof58 = gcc(refsig=sig5, sig=sig8, timestamp=None)[0]
+            tof51 = gcc(refsig=sig5, sig=sig1, timestamp=None, max_tau=max_tau)[0]
+            tof52 = gcc(refsig=sig5, sig=sig2, timestamp=None, max_tau=max_tau)[0]
+            tof53 = gcc(refsig=sig5, sig=sig3, timestamp=None, max_tau=max_tau)[0]
+            tof54 = gcc(refsig=sig5, sig=sig4, timestamp=None, max_tau=max_tau)[0]
+            tof56 = gcc(refsig=sig5, sig=sig6, timestamp=None, max_tau=max_tau)[0]
+            tof57 = gcc(refsig=sig5, sig=sig7, timestamp=None, max_tau=max_tau)[0]
+            tof58 = gcc(refsig=sig5, sig=sig8, timestamp=None, max_tau=max_tau)[0]
             velo51 = ae / tof51
             velo52 = ad / tof52
             velo53 = ac / tof53
@@ -220,13 +221,13 @@ def onetap(sigdict: list, which: int, diameter = 0.3):
             
             return np.array((velo51, velo52, velo53, velo54, 0, velo56, velo57, velo58), dtype=np.float32)
         case 6:
-            tof61 = gcc(refsig=sig6, sig=sig1, timestamp=None)[0]
-            tof62 = gcc(refsig=sig6, sig=sig2, timestamp=None)[0]
-            tof63 = gcc(refsig=sig6, sig=sig3, timestamp=None)[0]
-            tof64 = gcc(refsig=sig6, sig=sig4, timestamp=None)[0]
-            tof65 = gcc(refsig=sig6, sig=sig5, timestamp=None)[0]
-            tof67 = gcc(refsig=sig6, sig=sig7, timestamp=None)[0]
-            tof68 = gcc(refsig=sig6, sig=sig8, timestamp=None)[0]
+            tof61 = gcc(refsig=sig6, sig=sig1, timestamp=None, max_tau=max_tau)[0]
+            tof62 = gcc(refsig=sig6, sig=sig2, timestamp=None, max_tau=max_tau)[0]
+            tof63 = gcc(refsig=sig6, sig=sig3, timestamp=None, max_tau=max_tau)[0]
+            tof64 = gcc(refsig=sig6, sig=sig4, timestamp=None, max_tau=max_tau)[0]
+            tof65 = gcc(refsig=sig6, sig=sig5, timestamp=None, max_tau=max_tau)[0]
+            tof67 = gcc(refsig=sig6, sig=sig7, timestamp=None, max_tau=max_tau)[0]
+            tof68 = gcc(refsig=sig6, sig=sig8, timestamp=None, max_tau=max_tau)[0]
             velo61 = ad / tof61
             velo62 = ae / tof62
             velo63 = ad / tof63
@@ -237,13 +238,13 @@ def onetap(sigdict: list, which: int, diameter = 0.3):
             
             return np.array((velo61, velo62, velo63, velo64, velo65, 0, velo67, velo68), dtype=np.float32)
         case 7:
-            tof71 = gcc(refsig=sig7, sig=sig1, timestamp=None)[0]
-            tof72 = gcc(refsig=sig7, sig=sig2, timestamp=None)[0]
-            tof73 = gcc(refsig=sig7, sig=sig3, timestamp=None)[0]
-            tof74 = gcc(refsig=sig7, sig=sig4, timestamp=None)[0]
-            tof75 = gcc(refsig=sig7, sig=sig5, timestamp=None)[0]
-            tof76 = gcc(refsig=sig7, sig=sig6, timestamp=None)[0]
-            tof78 = gcc(refsig=sig7, sig=sig8, timestamp=None)[0]
+            tof71 = gcc(refsig=sig7, sig=sig1, timestamp=None, max_tau=max_tau)[0]
+            tof72 = gcc(refsig=sig7, sig=sig2, timestamp=None, max_tau=max_tau)[0]
+            tof73 = gcc(refsig=sig7, sig=sig3, timestamp=None, max_tau=max_tau)[0]
+            tof74 = gcc(refsig=sig7, sig=sig4, timestamp=None, max_tau=max_tau)[0]
+            tof75 = gcc(refsig=sig7, sig=sig5, timestamp=None, max_tau=max_tau)[0]
+            tof76 = gcc(refsig=sig7, sig=sig6, timestamp=None, max_tau=max_tau)[0]
+            tof78 = gcc(refsig=sig7, sig=sig8, timestamp=None, max_tau=max_tau)[0]
             velo71 = ac / tof71
             velo72 = ad / tof72
             velo73 = ae / tof73
@@ -254,13 +255,13 @@ def onetap(sigdict: list, which: int, diameter = 0.3):
             
             return np.array((velo71, velo72, velo73, velo74, velo75, velo76, 0, velo78), dtype=np.float32)
         case 8:
-            tof81 = gcc(refsig=sig8, sig=sig1, timestamp=None)[0]
-            tof82 = gcc(refsig=sig8, sig=sig2, timestamp=None)[0]
-            tof83 = gcc(refsig=sig8, sig=sig3, timestamp=None)[0]
-            tof84 = gcc(refsig=sig8, sig=sig4, timestamp=None)[0]
-            tof85 = gcc(refsig=sig8, sig=sig5, timestamp=None)[0]
-            tof86 = gcc(refsig=sig8, sig=sig6, timestamp=None)[0]
-            tof87 = gcc(refsig=sig8, sig=sig7, timestamp=None)[0]
+            tof81 = gcc(refsig=sig8, sig=sig1, timestamp=None, max_tau=max_tau)[0]
+            tof82 = gcc(refsig=sig8, sig=sig2, timestamp=None, max_tau=max_tau)[0]
+            tof83 = gcc(refsig=sig8, sig=sig3, timestamp=None, max_tau=max_tau)[0]
+            tof84 = gcc(refsig=sig8, sig=sig4, timestamp=None, max_tau=max_tau)[0]
+            tof85 = gcc(refsig=sig8, sig=sig5, timestamp=None, max_tau=max_tau)[0]
+            tof86 = gcc(refsig=sig8, sig=sig6, timestamp=None, max_tau=max_tau)[0]
+            tof87 = gcc(refsig=sig8, sig=sig7, timestamp=None, max_tau=max_tau)[0]
             velo81 = ab / tof81
             velo82 = ac / tof82
             velo83 = ad / tof83
