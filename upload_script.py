@@ -23,7 +23,7 @@ FTP_PORT = 2121
 FTP_TARGET_FOLDER = "/terawang"
 
 # Folder data lokal
-LOCAL_DATA_FOLDER = "data"
+LOCAL_DATA_FOLDER = "test"
 
 def get_formatted_mac():
     """Mendapatkan alamat MAC dan memformatnya dengan tanda hubung."""
