@@ -80,8 +80,8 @@ def gcc(sig, refsig, fs=1000000, CCType="PHAT", **kwargs):
     shift = np.argmax(np.abs(cc))
     
     # Koreksi untuk lag negatif (jika puncak ada di paruh kedua array)
-    if shift > n / 2:
-        shift -= n
+    # if shift > n / 2: 
+    #     shift -= n
 
     # Perhitungan tau yang disederhanakan dan diperbaiki
     tau = shift / float(fs)
