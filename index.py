@@ -6,13 +6,13 @@ import codecs, json
 import time
 import os
 import pika
-import scipy
 import uuid # Ditambahkan untuk menghasilkan UUID
 from ftplib import FTP
 from collections import defaultdict
 from datetime import datetime
 import shutil
 from dotenv import load_dotenv
+from gccestimating import GCC, corrlags
 
 # Muat variabel dari file .env
 load_dotenv()
@@ -87,71 +87,78 @@ def load_sigarray_from_json(filename):
         print(f"Error saat menyusun numpy array: {e}")
         return None
 
-def gcc(sig, refsig, fs=1000000, max_tau=None, interp=128, timestamp=None) -> tuple:
-    """Menghitung Generalized Cross-Correlation."""
-    
-    # Generalized Cross Correlation Phase Transform
-    n = len(sig)
-    
-    # Remove DC component
-    sig = sig - np.mean(sig, axis=0)
-    refsig = refsig - np.mean(refsig, axis=0)
-    
-    # RFFT because it's faster, it doesn't compute the negative side
-    SIG = np.fft.rfft(sig, axis=0, n=n)
-    REFSIG = np.fft.rfft(refsig, axis=0, n=n)
-    R = SIG * np.conj(REFSIG)
-    
-    WEIGHT = 1 / (np.abs(R) + 1e-10) # No need to use anything else other than PHAT
-    
-    Integ = R * WEIGHT
-    cc = np.fft.irfft(Integ, axis=0, n=n)
-    lags = scipy.signal.correlation_lags(len(sig), len(refsig), mode= 'same')
 
-    max_shift = int(interp * n / 2)
+def gccest(siga, sigb, samplerate=1, cctype="phat"):
+    n = int((len(siga)+ len(sigb)) / 2)
     
-    if max_tau:
-        max_shift = min(int(interp * fs * max_tau), max_shift)
+    siga -= np.mean(siga, axis=0)
+    sigb -= np.mean(sigb, axis=0)
+    
+    lags = corrlags(2*n-1, samplerate=samplerate)
+    
+    gcc = GCC(sig1=siga,sig2=sigb)
+    
+    match cctype.lower():
+        case "cc":
+            cc = gcc.cc()
+        case "phat":
+            cc = gcc.phat()
+        case "scot":
+            cc = gcc.scot()
+        case"roth":
+            cc = gcc.roth()
+        case"ht":
+            cc = gcc.ht()
+        case _:
+            cc = gcc.cc()
+    
+    cc /= np.max(np.abs(cc))    # normalize
 
-    smallcc = np.concatenate((cc[-max_shift:], cc[:max_shift+1]))
-    smallcc /= np.max(cc)
-    
-    # find max cross correlation index
-    shift = np.argmax(smallcc) - max_shift
-    
-    # Sometimes, there is a 180-degree phase difference between the two microphones.
-    # shift = np.argmax(np.abs(cc)) - max_shift
-    
-    cc = scipy.ndimage.shift(cc, len(cc)/2, mode="grid-wrap", order = 5)
-    cc /= np.max(cc)
-    
-    tau = shift / float(interp * fs)
-    
+    return cc, lags
+
+# y = 27808x + timestamp[0]
+
+def timestampextrapolate(x,origin):
+    return 27808*x + origin
+
+def tauest(cc, lags, samplerate = 1, timestamp = None):
+    shift = np.argmax(np.abs(cc)) # the index of the maximum value in cc
+    # no need to roll to center, it is already centered
+    tau = lags[shift] / float(samplerate)  # in seconds
     if timestamp is not None:
-        
-        peaktimestamp = timestamp[np.argmax(cc)]
-        
-        timestamp = scipy.ndimage.shift(timestamp, len(timestamp)/2, mode="grid-wrap", order = 5)
-        
-        a = timestamp[0] # first possible timestamp on the dataframe
-        b = timestamp[max_shift] # timestamp that corresponds fo the end of smalltimestamp 
-        c = timestamp[-max_shift-1] # timestamp that corresponds to the start of the smalltimestamp
-        d = timestamp[-1] # last possible timestamp on the dataframe
-        # smalltimestamp = np.concatenate((timestamp[-max_shift:], timestamp[:max_shift+1]))
-        # peaktimestamp = smalltimestamp[np.argmax(smallcc)]
-        
-        if a > peaktimestamp >=  b:
-            tau = int(peaktimestamp - a) # in micros
-        else:
-            tau = int(-peaktimestamp + c) # in micros, negative
-        tau /= 1000000 # convert to seconds
+        if len(timestamp) < 999:
+            # append to timestamp
+            for x in range(1,251,1): # x from 1 to 250
+                timestamp = np.append(timestamp, timestampextrapolate(x=x,origin=timestamp[0]))
+            for x in range(-1,-250,-1): # x from -1 to -249
+                timestamp = np.insert(timestamp, 0, timestampextrapolate(x=x,origin=timestamp[0]))     
+        peaktimestamp = timestamp[shift]
+        origintimestamp = timestamp[np.argmin(np.abs(lags))]  # the timestamp corresponding to the zero lag
+        tau = peaktimestamp - origintimestamp # in nanoseconds
+        # timestamp needs to be extrapolated to 2x the length
+        tau /= 1000000000 # convert to seconds
+    return np.abs(tau), shift
 
-    tau /= 10
+def safe_divide(num, denom, default_value=1e8):
+    if not isinstance(num, (int, float)) or not isinstance(denom, (int, float)):
+        raise ValueError("Both num and denom must be numbers!")
     
-    return np.abs(tau), cc, lags
+    if denom == 0:
+        return default_value
+    
+    return num / denom
 
-def onetap(sigarray: np.ndarray, which: int, diameter: float) -> np.ndarray:
-    """Menghitung kecepatan dari satu set data ketukan."""
+def taufromsig(siga, sigb, samplerate= 1, timestamp= None):
+    cc, lags = gccest(siga= siga, sigb= sigb, samplerate= samplerate)
+    tau, shift = tauest(cc= cc, lags= lags, samplerate= samplerate, timestamp= timestamp)
+    return tau, shift
+
+def onetap(sigarray: np.ndarray, which: int, diameter = 0.3, samplerate = 35961):
+    
+    # Samples per second
+    # Why? it takes an average of 27808 nanoseconds to capture one sample
+    # so 1 second / 27808 nanoseconds = 35960.8746 samples per second
+    # Round up to 35961 samples per second
     
     # function to tap once. produces 7 ToF/tau from 7 CC, out of 8 sensors
     
@@ -166,7 +173,7 @@ def onetap(sigarray: np.ndarray, which: int, diameter: float) -> np.ndarray:
     sig7 = sigarray["value7"]
     sig8 = sigarray["value8"]
     timestamp = sigarray["timestamp"]
-    
+        
     radius = diameter/2
     ab = radius * 0.76536686473 # sqrt(sqrt(2)-2)
     ac = radius * 1.41421356237 # sqrt(2)
@@ -178,149 +185,199 @@ def onetap(sigarray: np.ndarray, which: int, diameter: float) -> np.ndarray:
     # ad = 14,25,36,47,58,61,72,83
     # ae = 15,26,37,48,51,62,73,84
     
-    try:
-        match which:
-            case 1:
-                tof12 = gcc(refsig=sig1, sig=sig2, timestamp=timestamp)[0]
-                tof13 = gcc(refsig=sig1, sig=sig3, timestamp=timestamp)[0]
-                tof14 = gcc(refsig=sig1, sig=sig4, timestamp=timestamp)[0]
-                tof15 = gcc(refsig=sig1, sig=sig5, timestamp=timestamp)[0]
-                tof16 = gcc(refsig=sig1, sig=sig6, timestamp=timestamp)[0]
-                tof17 = gcc(refsig=sig1, sig=sig7, timestamp=timestamp)[0]
-                tof18 = gcc(refsig=sig1, sig=sig8, timestamp=timestamp)[0]
-                velo12 = ab / tof12
-                velo13 = ac / tof13
-                velo14 = ad / tof14
-                velo15 = ae / tof15
-                velo16 = ad / tof16
-                velo17 = ac / tof17
-                velo18 = ab / tof18
+    match which:
+        case 1:
+            tof12 = taufromsig(siga= sig1, sigb= sig2, samplerate= samplerate, timestamp= timestamp)[0]
+            velo12 = safe_divide(ab, tof12)
             
-                return np.array((0, velo12, velo13, velo14, velo15, velo16, velo17, velo18), dtype=np.float32)
-            case 2:
-                tof21 = gcc(refsig=sig2, sig=sig1, timestamp=timestamp)[0]
-                tof23 = gcc(refsig=sig2, sig=sig3, timestamp=timestamp)[0]
-                tof24 = gcc(refsig=sig2, sig=sig4, timestamp=timestamp)[0]
-                tof25 = gcc(refsig=sig2, sig=sig5, timestamp=timestamp)[0]
-                tof26 = gcc(refsig=sig2, sig=sig6, timestamp=timestamp)[0]
-                tof27 = gcc(refsig=sig2, sig=sig7, timestamp=timestamp)[0]
-                tof28 = gcc(refsig=sig2, sig=sig8, timestamp=timestamp)[0]
-                velo21 = ab / tof21
-                velo23 = ab / tof23
-                velo24 = ac / tof24
-                velo25 = ad / tof25
-                velo26 = ae / tof26
-                velo27 = ad / tof27
-                velo28 = ac / tof28
+            tof13 = taufromsig(siga= sig1, sigb= sig3, samplerate= samplerate, timestamp= timestamp)[0]
+            velo13 = safe_divide(ac, tof13)
             
-                return np.array((velo21, 0, velo23, velo24, velo25, velo26, velo27, velo28), dtype=np.float32)
-            case 3:
-                tof31 = gcc(refsig=sig3, sig=sig1, timestamp=timestamp)[0]
-                tof32 = gcc(refsig=sig3, sig=sig2, timestamp=timestamp)[0]
-                tof34 = gcc(refsig=sig3, sig=sig4, timestamp=timestamp)[0]
-                tof35 = gcc(refsig=sig3, sig=sig5, timestamp=timestamp)[0]
-                tof36 = gcc(refsig=sig3, sig=sig6, timestamp=timestamp)[0]
-                tof37 = gcc(refsig=sig3, sig=sig7, timestamp=timestamp)[0]
-                tof38 = gcc(refsig=sig3, sig=sig8, timestamp=timestamp)[0]
-                velo31 = ac / tof31
-                velo32 = ab / tof32
-                velo34 = ab / tof34
-                velo35 = ac / tof35
-                velo36 = ad / tof36
-                velo37 = ae / tof37
-                velo38 = ad / tof38
+            tof14 = taufromsig(siga= sig1, sigb= sig4, samplerate= samplerate, timestamp= timestamp)[0]
+            velo14 = safe_divide(ad, tof14)
             
-                return np.array((velo31, velo32, 0, velo34, velo35, velo36, velo37, velo38), dtype=np.float32) 
-            case 4:
-                tof41 = gcc(refsig=sig4, sig=sig1, timestamp=timestamp)[0]
-                tof42 = gcc(refsig=sig4, sig=sig2, timestamp=timestamp)[0]
-                tof43 = gcc(refsig=sig4, sig=sig3, timestamp=timestamp)[0]
-                tof45 = gcc(refsig=sig4, sig=sig5, timestamp=timestamp)[0]
-                tof46 = gcc(refsig=sig4, sig=sig6, timestamp=timestamp)[0]
-                tof47 = gcc(refsig=sig4, sig=sig7, timestamp=timestamp)[0]
-                tof48 = gcc(refsig=sig4, sig=sig8, timestamp=timestamp)[0]
-                velo41 = ad / tof41
-                velo42 = ac / tof42
-                velo43 = ab / tof43
-                velo45 = ab / tof45
-                velo46 = ac / tof46
-                velo47 = ad / tof47
-                velo48 = ae / tof48
+            tof15 = taufromsig(siga= sig1, sigb= sig5, samplerate= samplerate, timestamp= timestamp)[0]
+            velo15 = safe_divide(ae, tof15)
             
-                return np.array((velo41, velo42, velo43, 0, velo45, velo46, velo47, velo48), dtype=np.float32)
-            case 5:
-                tof51 = gcc(refsig=sig5, sig=sig1, timestamp=timestamp)[0]
-                tof52 = gcc(refsig=sig5, sig=sig2, timestamp=timestamp)[0]
-                tof53 = gcc(refsig=sig5, sig=sig3, timestamp=timestamp)[0]
-                tof54 = gcc(refsig=sig5, sig=sig4, timestamp=timestamp)[0]
-                tof56 = gcc(refsig=sig5, sig=sig6, timestamp=timestamp)[0]
-                tof57 = gcc(refsig=sig5, sig=sig7, timestamp=timestamp)[0]
-                tof58 = gcc(refsig=sig5, sig=sig8, timestamp=timestamp)[0]
-                velo51 = ae / tof51
-                velo52 = ad / tof52
-                velo53 = ac / tof53
-                velo54 = ab / tof54
-                velo56 = ab / tof56
-                velo57 = ac / tof57
-                velo58 = ad / tof58
+            tof16 = taufromsig(siga= sig1, sigb= sig6, samplerate= samplerate, timestamp= timestamp)[0]
+            velo16 = safe_divide(ad, tof16)
             
-                return np.array((velo51, velo52, velo53, velo54, 0, velo56, velo57, velo58), dtype=np.float32)
-            case 6:
-                tof61 = gcc(refsig=sig6, sig=sig1, timestamp=timestamp)[0]
-                tof62 = gcc(refsig=sig6, sig=sig2, timestamp=timestamp)[0]
-                tof63 = gcc(refsig=sig6, sig=sig3, timestamp=timestamp)[0]
-                tof64 = gcc(refsig=sig6, sig=sig4, timestamp=timestamp)[0]
-                tof65 = gcc(refsig=sig6, sig=sig5, timestamp=timestamp)[0]
-                tof67 = gcc(refsig=sig6, sig=sig7, timestamp=timestamp)[0]
-                tof68 = gcc(refsig=sig6, sig=sig8, timestamp=timestamp)[0]
-                velo61 = ad / tof61
-                velo62 = ae / tof62
-                velo63 = ad / tof63
-                velo64 = ac / tof64
-                velo65 = ab / tof65
-                velo67 = ab / tof67
-                velo68 = ac / tof68
+            tof17 = taufromsig(siga= sig1, sigb= sig7, samplerate= samplerate, timestamp= timestamp)[0]
+            velo17 = safe_divide(ac, tof17)
             
-                return np.array((velo61, velo62, velo63, velo64, velo65, 0, velo67, velo68), dtype=np.float32)
-            case 7:
-                tof71 = gcc(refsig=sig7, sig=sig1, timestamp=timestamp)[0]
-                tof72 = gcc(refsig=sig7, sig=sig2, timestamp=timestamp)[0]
-                tof73 = gcc(refsig=sig7, sig=sig3, timestamp=timestamp)[0]
-                tof74 = gcc(refsig=sig7, sig=sig4, timestamp=timestamp)[0]
-                tof75 = gcc(refsig=sig7, sig=sig5, timestamp=timestamp)[0]
-                tof76 = gcc(refsig=sig7, sig=sig6, timestamp=timestamp)[0]
-                tof78 = gcc(refsig=sig7, sig=sig8, timestamp=timestamp)[0]
-                velo71 = ac / tof71
-                velo72 = ad / tof72
-                velo73 = ae / tof73
-                velo74 = ad / tof74
-                velo75 = ac / tof75
-                velo76 = ab / tof76
-                velo78 = ab / tof78
+            tof18 = taufromsig(siga= sig1, sigb= sig8, samplerate= samplerate, timestamp= timestamp)[0]
+            velo18 = safe_divide(ab, tof18)
             
-                return np.array((velo71, velo72, velo73, velo74, velo75, velo76, 0, velo78), dtype=np.float32)
-            case 8:
-                tof81 = gcc(refsig=sig8, sig=sig1, timestamp=timestamp)[0]
-                tof82 = gcc(refsig=sig8, sig=sig2, timestamp=timestamp)[0]
-                tof83 = gcc(refsig=sig8, sig=sig3, timestamp=timestamp)[0]
-                tof84 = gcc(refsig=sig8, sig=sig4, timestamp=timestamp)[0]
-                tof85 = gcc(refsig=sig8, sig=sig5, timestamp=timestamp)[0]
-                tof86 = gcc(refsig=sig8, sig=sig6, timestamp=timestamp)[0]
-                tof87 = gcc(refsig=sig8, sig=sig7, timestamp=timestamp)[0]
-                velo81 = ab / tof81
-                velo82 = ac / tof82
-                velo83 = ad / tof83
-                velo84 = ae / tof84
-                velo85 = ad / tof85
-                velo86 = ac / tof86
-                velo87 = ab / tof87
+            return np.array((0, velo12, velo13, velo14, velo15, velo16, velo17, velo18), dtype=np.float32)
+        case 2:
             
-                return np.array((velo81, velo82, velo83, velo84, velo85, velo86, velo87, 0), dtype=np.float32)
-            case _:
-                raise ValueError("Invalid number. Expected between 1 and 8")
-    except ValueError as ve:
-        print(f"Error saat menghitung ToF: {ve}")
-        return np.zeros(8, dtype=np.float32)
+            tof21 = taufromsig(siga= sig2, sigb= sig1, samplerate= samplerate, timestamp= timestamp)[0]
+            velo21 = safe_divide(ab, tof21)
+            
+            tof23 = taufromsig(siga= sig2, sigb= sig3, samplerate= samplerate, timestamp= timestamp)[0]
+            velo23 = safe_divide(ab, tof23)
+            
+            tof24 = taufromsig(siga= sig2, sigb= sig4, samplerate= samplerate, timestamp= timestamp)[0]
+            velo24 = safe_divide(ac, tof24)
+            
+            tof25 = taufromsig(siga= sig2, sigb= sig5, samplerate= samplerate, timestamp= timestamp)[0]
+            velo25 = safe_divide(ad, tof25)
+            
+            tof26 = taufromsig(siga= sig2, sigb= sig6, samplerate= samplerate, timestamp= timestamp)[0]
+            velo26 = safe_divide(ae, tof26)
+            
+            tof27 = taufromsig(siga= sig2, sigb= sig7, samplerate= samplerate, timestamp= timestamp)[0]
+            velo27 = safe_divide(ad, tof27)
+            
+            tof28 = taufromsig(siga= sig2, sigb= sig8, samplerate= samplerate, timestamp= timestamp)[0]
+            velo28 = safe_divide(ac, tof28)
+            
+            return np.array((velo21, 0, velo23, velo24, velo25, velo26, velo27, velo28), dtype=np.float32)
+        case 3:
+            
+            tof31 = taufromsig(siga= sig3, sigb= sig1, samplerate= samplerate, timestamp= timestamp)[0]
+            velo31 = safe_divide(ac, tof31)
+            
+            tof32 = taufromsig(siga= sig3, sigb= sig2, samplerate= samplerate, timestamp= timestamp)[0]
+            velo32 = safe_divide(ab, tof32)
+            
+            tof34 = taufromsig(siga= sig3, sigb= sig4, samplerate= samplerate, timestamp= timestamp)[0]
+            velo34 = safe_divide(ab, tof34)
+            
+            tof35 = taufromsig(siga= sig3, sigb= sig5, samplerate= samplerate, timestamp= timestamp)[0]
+            velo35 = safe_divide(ac, tof35)
+            
+            tof36 = taufromsig(siga= sig3, sigb= sig6, samplerate= samplerate, timestamp= timestamp)[0]
+            velo36 = safe_divide(ad, tof36)
+            
+            tof37 = taufromsig(siga= sig3, sigb= sig7, samplerate= samplerate, timestamp= timestamp)[0]
+            velo37 = safe_divide(ae, tof37)
+            
+            tof38 = taufromsig(siga= sig3, sigb= sig8, samplerate= samplerate, timestamp= timestamp)[0]
+            velo38 = safe_divide(ad, tof38)
+            
+            return np.array((velo31, velo32, 0, velo34, velo35, velo36, velo37, velo38), dtype=np.float32) 
+        case 4:
+            
+            tof41 = taufromsig(siga= sig4, sigb= sig1, samplerate= samplerate, timestamp= timestamp)[0]
+            velo41 = safe_divide(ad, tof41)
+            
+            tof42 = taufromsig(siga= sig4, sigb= sig2, samplerate= samplerate, timestamp= timestamp)[0]
+            velo42 = safe_divide(ac, tof42)
+            
+            tof43 = taufromsig(siga= sig4, sigb= sig3, samplerate= samplerate, timestamp= timestamp)[0]
+            velo43 = safe_divide(ab, tof43)
+            
+            tof45 = taufromsig(siga= sig4, sigb= sig5, samplerate= samplerate, timestamp= timestamp)[0]
+            velo45 = safe_divide(ab, tof45)
+            
+            tof46 = taufromsig(siga= sig4, sigb= sig6, samplerate= samplerate, timestamp= timestamp)[0]
+            velo46 = safe_divide(ac, tof46)
+            
+            tof47 = taufromsig(siga= sig4, sigb= sig7, samplerate= samplerate, timestamp= timestamp)[0]
+            velo47 = safe_divide(ad, tof47)
+            
+            tof48 = taufromsig(siga= sig4, sigb= sig8, samplerate= samplerate, timestamp= timestamp)[0]
+            velo48 = safe_divide(ae, tof48)
+            
+            return np.array((velo41, velo42, velo43, 0, velo45, velo46, velo47, velo48), dtype=np.float32)
+        case 5:
+            
+            tof51 = taufromsig(siga= sig5, sigb= sig1, samplerate= samplerate, timestamp= timestamp)[0]
+            velo51 = safe_divide(ae, tof51)
+            
+            tof52 = taufromsig(siga= sig5, sigb= sig2, samplerate= samplerate, timestamp= timestamp)[0]
+            velo52 = safe_divide(ad, tof52)
+            
+            tof53 = taufromsig(siga= sig5, sigb= sig3, samplerate= samplerate, timestamp= timestamp)[0]
+            velo53 = safe_divide(ac, tof53)
+            
+            tof54 = taufromsig(siga= sig5, sigb= sig4, samplerate= samplerate, timestamp= timestamp)[0]
+            velo54 = safe_divide(ab, tof54)
+            
+            tof56 = taufromsig(siga= sig5, sigb= sig6, samplerate= samplerate, timestamp= timestamp)[0]
+            velo56 = safe_divide(ab, tof56)
+            
+            tof57 = taufromsig(siga= sig5, sigb= sig7, samplerate= samplerate, timestamp= timestamp)[0]
+            velo57 = safe_divide(ac, tof57)
+            
+            tof58 = taufromsig(siga= sig5, sigb= sig8, samplerate= samplerate, timestamp= timestamp)[0]
+            velo58 = safe_divide(ad, tof58)
+            
+            return np.array((velo51, velo52, velo53, velo54, 0, velo56, velo57, velo58), dtype=np.float32)
+        case 6:
+            
+            tof61 = taufromsig(siga= sig6, sigb= sig1, samplerate= samplerate, timestamp= timestamp)[0]
+            velo61 = safe_divide(ad, tof61)
+            
+            tof62 = taufromsig(siga= sig6, sigb= sig2, samplerate= samplerate, timestamp= timestamp)[0]
+            velo62 = safe_divide(ae, tof62)
+            
+            tof63 = taufromsig(siga= sig6, sigb= sig3, samplerate= samplerate, timestamp= timestamp)[0]
+            velo63 = safe_divide(ad, tof63)
+            
+            tof64 = taufromsig(siga= sig6, sigb= sig4, samplerate= samplerate, timestamp= timestamp)[0]
+            velo64 = safe_divide(ac, tof64)
+            
+            tof65 = taufromsig(siga= sig6, sigb= sig5, samplerate= samplerate, timestamp= timestamp)[0]
+            velo65 = safe_divide(ab, tof65)
+            
+            tof67 = taufromsig(siga= sig6, sigb= sig7, samplerate= samplerate, timestamp= timestamp)[0]
+            velo67 = safe_divide(ab, tof67)
+            
+            tof68 = taufromsig(siga= sig6, sigb= sig8, samplerate= samplerate, timestamp= timestamp)[0]
+            velo68 = safe_divide(ac, tof68)
+            
+            return np.array((velo61, velo62, velo63, velo64, velo65, 0, velo67, velo68), dtype=np.float32)
+        case 7:
+            
+            tof71 = taufromsig(siga= sig7, sigb= sig1, samplerate= samplerate, timestamp= timestamp)[0]
+            velo71 = safe_divide(ac, tof71)
+            
+            tof72 = taufromsig(siga= sig7, sigb= sig2, samplerate= samplerate, timestamp= timestamp)[0]
+            velo72 = safe_divide(ad, tof72)
+            
+            tof73 = taufromsig(siga= sig7, sigb= sig3, samplerate= samplerate, timestamp= timestamp)[0]
+            velo73 = safe_divide(ae, tof73)
+            
+            tof74 = taufromsig(siga= sig7, sigb= sig4, samplerate= samplerate, timestamp= timestamp)[0]
+            velo74 = safe_divide(ad, tof74)
+            
+            tof75 = taufromsig(siga= sig7, sigb= sig5, samplerate= samplerate, timestamp= timestamp)[0]
+            velo75 = safe_divide(ac, tof75)
+            
+            tof76 = taufromsig(siga= sig7, sigb= sig6, samplerate= samplerate, timestamp= timestamp)[0]
+            velo76 = safe_divide(ab, tof76)
+            
+            tof78 = taufromsig(siga= sig7, sigb= sig8, samplerate= samplerate, timestamp= timestamp)[0]
+            velo78 = safe_divide(ab, tof78)
+            
+            return np.array((velo71, velo72, velo73, velo74, velo75, velo76, 0, velo78), dtype=np.float32)
+        case 8:
+            tof81 = taufromsig(siga= sig8, sigb= sig1, samplerate= samplerate, timestamp= timestamp)[0]
+            velo81 = safe_divide(ab, tof81)
+            
+            tof82 = taufromsig(siga= sig8, sigb= sig2, samplerate= samplerate, timestamp= timestamp)[0]
+            velo82 = safe_divide(ac, tof82)
+            
+            tof83 = taufromsig(siga= sig8, sigb= sig3, samplerate= samplerate, timestamp= timestamp)[0]
+            velo83 = safe_divide(ad, tof83)
+            
+            tof84 = taufromsig(siga= sig8, sigb= sig4, samplerate= samplerate, timestamp= timestamp)[0]
+            velo84 = safe_divide(ae, tof84)
+            
+            tof85 = taufromsig(siga= sig8, sigb= sig5, samplerate= samplerate, timestamp= timestamp)[0]
+            velo85 = safe_divide(ad, tof85)
+            
+            tof86 = taufromsig(siga= sig8, sigb= sig6, samplerate= samplerate, timestamp= timestamp)[0]
+            velo86 = safe_divide(ac, tof86)
+            
+            tof87 = taufromsig(siga= sig8, sigb= sig7, samplerate= samplerate, timestamp= timestamp)[0]
+            velo87 = safe_divide(ab, tof87)
+            
+            return np.array((velo81, velo82, velo83, velo84, velo85, velo86, velo87, 0), dtype=np.float32)
+        case _:
+            raise ValueError
 
 # =============================================================================
 # FUNGSI UTAMA UNTUK ORKESTRASI PEMROSESAN
