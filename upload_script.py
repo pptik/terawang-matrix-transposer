@@ -1,3 +1,5 @@
+
+
 import os
 import ftplib
 import pika
@@ -23,7 +25,7 @@ FTP_PORT = 2121
 FTP_TARGET_FOLDER = "/terawang"
 
 # Folder data lokal
-LOCAL_DATA_FOLDER = "test"
+LOCAL_DATA_FOLDER = "data"
 
 def get_formatted_mac():
     """Mendapatkan alamat MAC dan memformatnya dengan tanda hubung."""

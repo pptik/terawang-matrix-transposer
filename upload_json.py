@@ -8,9 +8,9 @@ FTP_USER = "terawang"
 FTP_PASSWORD = "Terawang@#2025"
 
 # --- Konfigurasi File & Folder ---
-LOCAL_FILE_NAME = "d4714642-7146-4b2c-bf19-853d412d448c.json"
+LOCAL_FILE_NAME = "ddfb0f54-7c67-48ab-a429-46c1dd6eba83.json"
 REMOTE_FOLDER = "/result"
-REMOTE_FILE_NAME = "d4714642-7146-4b2c-bf19-853d412d448c.json"
+REMOTE_FILE_NAME = "ddfb0f54-7c67-48ab-a429-46c1dd6eba83.json"
 
 # --- Pastikan file lokal ada (opsional, untuk pengujian) ---
 if not os.path.exists(LOCAL_FILE_NAME):

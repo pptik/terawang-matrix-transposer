@@ -1,0 +1,1 @@
+{"info": "ini adalah data dummy untuk file data_lain.txt", "nomor": "N/A"}
